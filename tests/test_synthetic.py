@@ -16,7 +16,7 @@ def make_rec(freq=1.0, minutes=20, fs=100.0, noise_uv=5.0, seed=0):
 
 
 def run(rec, strat, lat=SCENARIOS[0]):
-    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed"))
+    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=None))
     click1, _, late = schedule(trg, rec.sfreq, strat, lat, np.random.default_rng(0))
     return trg, score(click1, true_phase(rec), rec), late
 
@@ -80,8 +80,8 @@ def test_gate_rejects_slow_eye_movements():
     rng = np.random.default_rng(0)
     eye = 120 * np.sin(2 * np.pi * 0.3 * t)
     eeg = eye + 30 * np.cos(2 * np.pi * 1.0 * t) + rng.normal(0, 1, len(t))
-    assert len(detect(eeg, fs, DetectorConfig(eye_ratio_max=None, sustain_s=0)).trough_idx) > 50  # old gate fooled
-    assert len(detect(eeg, fs, DetectorConfig()).trough_idx) == 0
+    assert len(detect(eeg, fs, DetectorConfig(eye_ratio_max=None, sustain_s=0, trigger_rise=None)).trough_idx) > 50  # old gate fooled
+    assert len(detect(eeg, fs, DetectorConfig(trigger_rise=None)).trough_idx) == 0
 
 
 def test_gate_accepts_steady_deep_sleep():
@@ -95,7 +95,7 @@ def test_rising_flank_trigger_fires_after_the_trough_at_the_requested_level():
     from scipy.signal import butter, sosfilt
 
     rec = make_rec(minutes=10)
-    base = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed"))
+    base = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=None))
     late = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=0.0))
     sw = sosfilt(butter(2, (0.5, 2.0), btype="band", fs=rec.sfreq, output="sos"), rec.eeg)
     assert len(late.trough_idx) > 0.9 * len(base.trough_idx)

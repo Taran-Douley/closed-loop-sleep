@@ -17,7 +17,7 @@ the trough. The model is tiny (ridge regression or a ~10k-weight MLP), so infere
 a laptop or Raspberry Pi is microseconds.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.signal import butter, sosfilt
@@ -29,6 +29,7 @@ from sklearn.preprocessing import StandardScaler
 from .detector import DetectorConfig, Triggers
 
 DELAYS = np.arange(0.15, 0.901, 0.025)  # candidate click delays after the trough, seconds
+FLANK_DELAYS = np.arange(0.0, 0.601, 0.025)  # ... after a rising-flank trigger is available
 WINDOW_S = 2.0
 DECIMATE = 4  # 100 Hz -> 25 Hz for the model input
 
@@ -66,9 +67,18 @@ def crop(X: np.ndarray, window_s: float, fs: float = 100.0) -> np.ndarray:
     return np.hstack([X[:, n - k : n], X[:, 2 * n - k : 2 * n], X[:, -3:]])
 
 
+def anchor(trg: Triggers) -> tuple[np.ndarray, np.ndarray]:
+    """(sample each delay counts from, candidate delays): the trough for trough triggers,
+    the moment the trigger is available for rising-flank triggers."""
+    if trg.trigger_idx is None:
+        return trg.trough_idx, DELAYS
+    return trg.available_idx, FLANK_DELAYS
+
+
 def targets(phase: np.ndarray, fs: float, trg: Triggers) -> np.ndarray:
     """cos(phase error) for a click at each candidate delay (ground truth, offline only)."""
-    idx = trg.trough_idx[:, None] + np.round(DELAYS * fs).astype(int)[None, :]
+    start, delays = anchor(trg)
+    idx = start[:, None] + np.round(delays * fs).astype(int)[None, :]
     return np.cos(phase[np.clip(idx, 0, len(phase) - 1)])
 
 
@@ -76,6 +86,7 @@ def targets(phase: np.ndarray, fs: float, trg: Triggers) -> np.ndarray:
 class TimingModel:
     kind: str = "ridge"  # "ridge" | "mlp" | "gru" (needs the `gru` extra: torch)
     seed: int = 0
+    delays: np.ndarray = field(default_factory=lambda: DELAYS)  # FLANK_DELAYS for rising-flank triggers
 
     def fit(self, X: np.ndarray, Y: np.ndarray) -> "TimingModel":
         if self.kind == "ridge":
@@ -91,10 +102,11 @@ class TimingModel:
         self.pipe = make_pipeline(StandardScaler(), reg).fit(X, Y)
         return self
 
-    def predict(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Returns (delay in seconds, confidence = predicted cos at that delay)."""
+    def predict(self, X: np.ndarray, min_delay: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+        """Returns (delay in seconds, confidence = predicted cos at that delay), choosing
+        only among delays >= min_delay (e.g. the expected EEG + audio latency)."""
         if len(X) == 0:
             return np.empty(0), np.empty(0)
-        curve = self.pipe.predict(X)
+        curve = np.where(self.delays[None, :] >= min_delay - 1e-9, self.pipe.predict(X), -np.inf)
         best = curve.argmax(axis=1)
-        return DELAYS[best], curve[np.arange(len(curve)), best]
+        return self.delays[best], curve[np.arange(len(curve)), best]

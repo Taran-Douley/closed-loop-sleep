@@ -123,10 +123,12 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
         return pd.Series({
             "pct_within_45": 100 * g.hits.sum() / c if c else np.nan,
             "clicks_per_h": c / g.n2n3_h.sum(),
+            "on_target_per_h": g.hits.sum() / g.n2n3_h.sum(),
             "pct_N2N3": 100 * g.in_N2N3.sum() / c if c else np.nan,
             "pct_wake_REM": 100 * g.in_wake_REM.sum() / c if c else np.nan,
             "pct_nights_no_clicks": 100 * (g.clicks == 0).mean(),
             "gate_open_pct_N2N3": 100 * g.open_sleep.mean(),
+            "gate_open_pct_wake_REM": 100 * g.open_wake_rem.mean(),
         })
     keys = [c for c in ("band", "variant", "latency_ms", "method") if c in df]
     s = df.groupby(keys + ["split"], sort=False, observed=True).apply(per_split, include_groups=False)

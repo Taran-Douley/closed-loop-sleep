@@ -28,7 +28,7 @@ def run_night(rec_id):
     sid, night = rec_id
     rec = load_subject(sid, night=night)
     phase = true_phase(rec)
-    ours = detect(rec.eeg, rec.sfreq, DetectorConfig(), rec.stages)
+    ours = detect(rec.eeg, rec.sfreq, DetectorConfig(trigger_rise=None), rec.stages)
     variants = {"ours (adaptive p5 + causal gate)": ours}
     for r in RISES:
         variants[f"ours, trigger at rise {r:+g} x depth"] = detect(rec.eeg, rec.sfreq, DetectorConfig(trigger_rise=r), rec.stages)

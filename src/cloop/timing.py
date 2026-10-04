@@ -66,10 +66,13 @@ class Strategy:
 
     def target_times(self, trg: Triggers, fs: float) -> np.ndarray:
         trough = trg.trough_idx / fs
+        # fixed / predicted delays count from the trough, or, for rising-flank triggers,
+        # from when the trigger is available (see predict.anchor)
+        start = trough if trg.trigger_idx is None else trg.available_idx / fs
         if self.kind == "fixed":
-            return trough + self.delay
+            return start + self.delay
         if self.kind == "predicted":
-            return trough + trg.pred_delay
+            return start + trg.pred_delay
         quarter = np.clip((trg.trough_idx - trg.zc_idx) / fs, 0.125, 0.5)  # 0.5-2 Hz waves
         target = trough + 2 * quarter + self.offset
         if self.filter_correction:

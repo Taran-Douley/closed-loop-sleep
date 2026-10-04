@@ -22,6 +22,8 @@ cloop-phase0 = "cloop.phase0:main"
 cloop-timing = "cloop.phase05:main"
 cloop-baseline = "cloop.baseline:main"
 cloop-phase06 = "cloop.phase06:main"
+cloop-phase07 = "cloop.phase07:main"
+cloop-train = "cloop.pipeline:main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

@@ -49,7 +49,7 @@ def prepare(rec_id: tuple[int, int]) -> dict:
     path = CACHE / f"SC4{sid:02d}{night}_v{CACHE_VERSION}.npz"
     if not path.exists():
         rec = load_subject(sid, night=night)
-        trg = detect(rec.eeg, rec.sfreq, DetectorConfig(), rec.stages)
+        trg = detect(rec.eeg, rec.sfreq, DetectorConfig(trigger_rise=None), rec.stages)
         X = features(rec.eeg, rec.sfreq, trg, window_s=MAX_WINDOW_S)
         Y = targets(true_phase(rec), rec.sfreq, trg)
         n2n3_h = np.isin(rec.stages, (2, 3)).sum() / rec.sfreq / 3600

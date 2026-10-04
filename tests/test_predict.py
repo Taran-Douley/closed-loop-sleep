@@ -13,7 +13,7 @@ from test_synthetic import make_rec
 
 def test_features_ignore_the_future():
     rec = make_rec(minutes=10)
-    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed"))
+    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=None))
     X = features(rec.eeg, rec.sfreq, trg)
     for i in (5, 50, 100):
         cut = trg.available_idx[i] + 1
@@ -24,7 +24,7 @@ def test_features_ignore_the_future():
 
 def test_model_learns_the_delay_on_clean_waves():
     rec = make_rec(freq=0.8, minutes=30)
-    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed"))
+    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=None))
     X, Y = features(rec.eeg, rec.sfreq, trg), targets(true_phase(rec), rec.sfreq, trg)
     delay, conf = TimingModel("ridge").fit(X[:200], Y[:200]).predict(X[200:])
     # Not simply half a period (625 ms): the causal filter makes 0.8 Hz troughs look
@@ -37,7 +37,7 @@ def test_model_learns_the_delay_on_clean_waves():
 
 def test_crop_matches_a_shorter_window():
     rec = make_rec(minutes=10)
-    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed"))
+    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=None))
     long = features(rec.eeg, rec.sfreq, trg, window_s=8.0)
     assert np.allclose(crop(long, 2.0), features(rec.eeg, rec.sfreq, trg))
 
@@ -45,7 +45,7 @@ def test_crop_matches_a_shorter_window():
 def test_gru_learns_the_delay_on_clean_waves():
     pytest.importorskip("torch")
     rec = make_rec(freq=0.8, minutes=30)
-    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed"))
+    trg = detect(rec.eeg, rec.sfreq, DetectorConfig(gate="none", threshold="fixed", trigger_rise=None))
     X, Y = features(rec.eeg, rec.sfreq, trg), targets(true_phase(rec), rec.sfreq, trg)
     delay, conf = TimingModel("gru").fit(X[:200], Y[:200]).predict(X[200:])
     best_in_hindsight = DELAYS[Y[200:].mean(0).argmax()]

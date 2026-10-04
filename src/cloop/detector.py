@@ -37,12 +37,15 @@ class DetectorConfig:
     # Trigger point. None = at the trough (confirmed one sample later). A number r = later,
     # on the rising flank, at the first sample >= r * |trough depth| (0 = upward zero
     # crossing, -0.5 = halfway back up). Less to extrapolate, less latency slack.
-    # Portiloop's rule fires around r = +0.25 for typical waves.
-    trigger_rise: float | None = None
+    # Portiloop's rule fires around r = +0.25 for typical waves. Default since Phase 0.7
+    # (+20 points over the trough in Phase 0.5); Phase 0-0.5 scripts pin None.
+    trigger_rise: float | None = 0.5
     trigger_max_wait_s: float = 1.0  # give up if the rise doesn't happen in time
 
     # Causal sleep gate: only stimulate while delta dominates and nothing looks like arousal.
-    gate: str = "causal"  # "causal" | "oracle" (use hypnogram N2/N3) | "none"
+    # "external": a per-sample gate passed to detect(), e.g. from the learned stage
+    # classifier (stage.py); the sustained-sleep rule below is still applied to it.
+    gate: str = "causal"  # "causal" | "external" | "oracle" (use hypnogram N2/N3) | "none"
     gate_tau_s: float = 10.0  # EMA time constant for band powers
     delta_ratio_min: float = 0.80  # power(0.5-4 Hz) / power(0.5-30 Hz)
     hf_rms_max_uv: float = 2.5  # RMS in 16-30 Hz band (arousal / muscle veto)
@@ -103,7 +106,8 @@ def _relative_limit(v: np.ndarray, ok: np.ndarray, fixed: float, k: float, fs: f
     return lim
 
 
-def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray | None = None) -> Triggers:
+def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray | None = None,
+           gate_on: np.ndarray | None = None) -> Triggers:
     # A causal IIR filter gives identical output whether run packet-by-packet (with
     # carried state, as live code would) or over the whole array, so filter once.
     # Packetisation only matters for *when* a trigger becomes available (below).
@@ -123,16 +127,18 @@ def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray |
             eye_max = _relative_limit(eye, delta_ok, cfg.eye_ratio_max, cfg.eye_rel, fs, cfg) if cfg.gate_relative else cfg.eye_ratio_max
             gate_on &= eye < eye_max
         gate_on[: int(cfg.gate_tau_s * fs)] = False  # EMA warm-up
-        if cfg.sustain_s > 0:
-            w = int(cfg.sustain_s * fs)
-            cs = np.concatenate([[0], np.cumsum(gate_on)])
-            n = np.arange(1, len(gate_on) + 1)
-            frac_on = (cs[n] - cs[np.maximum(n - w, 0)]) / w  # causal: last w samples only
-            gate_on &= frac_on >= cfg.sustain_frac
+    elif cfg.gate == "external":
+        gate_on = np.asarray(gate_on, bool).copy()
     elif cfg.gate == "oracle":
         gate_on = np.isin(stages, (2, 3))
     else:
         gate_on = np.ones(len(eeg), dtype=bool)
+    if cfg.gate in ("causal", "external") and cfg.sustain_s > 0:
+        w = int(cfg.sustain_s * fs)
+        cs = np.concatenate([[0], np.cumsum(gate_on)])
+        n = np.arange(1, len(gate_on) + 1)
+        frac_on = (cs[n] - cs[np.maximum(n - w, 0)]) / w  # causal: last w samples only
+        gate_on &= frac_on >= cfg.sustain_frac
 
     lockout = int(cfg.lockout_s * fs)
     troughs, zcs, fired = [], [], []

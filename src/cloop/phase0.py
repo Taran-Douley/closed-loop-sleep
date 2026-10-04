@@ -26,15 +26,16 @@ from .predict import TimingModel, features, targets
 from .timing import SCENARIOS, Latency, Strategy, schedule
 
 DEFAULT = "adaptive p5, whole night (default)"
+TROUGH = {"trigger_rise": None}  # Phase 0 triggers at the trough
 DETECTORS = {
-    "fixed -40 uV": DetectorConfig(threshold="fixed", trough_uv=-40),
-    "fixed -60 uV": DetectorConfig(threshold="fixed", trough_uv=-60),
-    "fixed -80 uV": DetectorConfig(threshold="fixed", trough_uv=-80),
-    "adaptive p10, 10-min memory": DetectorConfig(adapt_pct=10, adapt_window=500),
-    "adaptive p10, whole night": DetectorConfig(adapt_pct=10),
-    DEFAULT: DetectorConfig(adapt_pct=5),
-    "adaptive p2, whole night": DetectorConfig(adapt_pct=2),
-    "oracle gate": DetectorConfig(gate="oracle"),  # default threshold, hypnogram gate
+    "fixed -40 uV": DetectorConfig(threshold="fixed", trough_uv=-40, **TROUGH),
+    "fixed -60 uV": DetectorConfig(threshold="fixed", trough_uv=-60, **TROUGH),
+    "fixed -80 uV": DetectorConfig(threshold="fixed", trough_uv=-80, **TROUGH),
+    "adaptive p10, 10-min memory": DetectorConfig(adapt_pct=10, adapt_window=500, **TROUGH),
+    "adaptive p10, whole night": DetectorConfig(adapt_pct=10, **TROUGH),
+    DEFAULT: DetectorConfig(adapt_pct=5, **TROUGH),
+    "adaptive p2, whole night": DetectorConfig(adapt_pct=2, **TROUGH),
+    "oracle gate": DetectorConfig(gate="oracle", **TROUGH),  # default threshold, hypnogram gate
 }
 FAMILIES = {
     "fixed delay": [Strategy("fixed", delay=d) for d in np.arange(0.3, 0.701, 0.025)],

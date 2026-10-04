@@ -6,7 +6,35 @@ clicks timed to land on the up-state of slow oscillations (Ngo et al., 2013).
 > **Not a medical device.** This is a research/hobby project. It makes no claim to improve
 > sleep, memory or health. Don't use it in place of medical care.
 
-## Phase 0 — offline phase-targeting (this repo, today)
+## Current default pipeline (Phase 0.7)
+
+```
+learned causal stage gate (P(N2/N3) >= 0.8, sustained 2 min)
+  -> adaptive "deepest 5%" threshold, trigger on the rising flank at +0.5 x trough depth
+  -> ridge timing model picks the delay (never sooner than EEG + audio latency)
+  -> optional: click only on the most confident half of waves
+```
+
+Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired audio):
+
+| | Phase 0 pipeline | **default (Phase 0.7)** | + top 50% confidence |
+|---|---|---|---|
+| clicks within ±45° of the up-state | 35.5% | 56.8% | 68.9% |
+| on-target clicks / hour of N2+N3 | ~10 | **37.6** | 22.3 |
+| clicks in wake/REM | 5.8% | **0.9%** | 0.9% |
+
+```bash
+uv run cloop-train                  # fit on all 153 nights -> models/closed_loop.pkl (needs cloop-phase07's cache)
+```
+```python
+from cloop.pipeline import ClosedLoop
+clicks = ClosedLoop.load("models/closed_loop.pkl").plan(eeg_uv, fs)   # clicks.issue_s, clicks.times_s
+```
+
+The phases below are the history of how we got here; each phase's script pins the settings
+it used, so its numbers still reproduce.
+
+## Phase 0 — offline phase-targeting
 
 Before buying hardware, answer: *using only data a live system would have, how often would
 clicks actually land on the up-state?*
@@ -284,6 +312,52 @@ No gate variant dominates, so the default stays the fixed gate.
    stage classifier (causal, learned from the hypnograms) and/or the extra sensors a headband
    has (accelerometer, PPG heart rate) — not threshold tuning.
 
+## Phase 0.7 — learned sleep-stage gate
+
+Phase 0.6 showed hand-made band-power thresholds can't tell wake from sleep in older people.
+`stage.py` learns it instead: per-second causal features (log power in 7 bands, 10 s and 60 s
+EMAs, raw and minus the person's running median tonight) → gradient-boosted N2/N3 classifier,
+trained on the Sleep-EDF hypnograms of the tune subjects (retrained every split). Its
+prediction for second *s* gates second *s + 1*; the 2-minute sustain rule still applies.
+
+```bash
+uv run cloop-phase07 --splits 10    # ~40 min; caches signal + features (~3 GB) in data/cache/
+```
+
+All gates share one ridge timing model (trained on the tune subjects' real N2/N3 waves).
+Rising-flank trigger, 55 ms latency, held-out subjects, 10 splits:
+
+| gate | % within ±45° | clicks/h | **on-target/h** | % in N2/N3 | % in wake/REM | nights with no clicks | opens % of N2/N3 |
+|---|---|---|---|---|---|---|---|
+| fixed (Phase 0) | 60.5 ± 1.2 | 22.4 | 13.6 | 94.6 | 4.5 | 7.8% | 15.5 |
+| relative k = 1.25 (0.6) | 60.2 ± 1.0 | 29.9 | 18.0 | 89.0 | 9.3 | 0% | 20.9 |
+| learned p ≥ 0.5 | 56.3 ± 1.0 | 81.9 | 46.1 | 95.6 | 1.7 | 0.1% | 71.8 |
+| **learned p ≥ 0.8** | 56.8 ± 0.9 | 66.1 | **37.6** | 97.5 | **0.9** | 1.4% | 56.2 |
+| learned p ≥ 0.9 | 57.3 ± 0.9 | 55.8 | 32.0 | 98.3 | 0.6 | 3.0% | 45.9 |
+| hypnogram (oracle) | 56.1 ± 0.9 | 101.8 | 57.1 | 100 | 0 | 0% | 100 |
+
+By age, learned p ≥ 0.8 vs fixed gate:
+
+| age | % in wake/REM (fixed → learned) | on-target/h (fixed → learned) | nights with no clicks |
+|---|---|---|---|
+| ≤ 40 | 0.8 → 0.5 | 22.4 → 51.1 | 0 → 0 |
+| 41–60 | 3.7 → 0.7 | 13.3 → 44.0 | 0 → 0 |
+| 61–80 | 1.1 → 1.1 | 10.8 → 33.0 | 9.8% → 0 |
+| 81+ | **34.0 → 2.1** | 6.3 → 17.4 | 23.2% → 6.4% |
+
+- The learned gate opens 3.6× more of real N2/N3 than the fixed gate while letting in less
+  wake: **2.8× the on-target clicks per hour, and wake/REM clicks down from 4.5% to 0.9%**.
+- It fixes the 81+ group, where a third of fixed-gate clicks were in wake/REM.
+- Each click is ~4 points less accurate than behind the fixed gate, because the fixed gate only
+  opened in the cleanest, deepest stretches (the hypnogram gate shows the same). Confidence
+  selection recovers it: 68.9% at half the dose, still 22 on-target clicks/h (vs 13.6).
+- p ≥ 0.8 is the default: the 0.5 gate gives more dose but twice the wake/REM, 0.9 starts
+  locking people out again.
+
+Caveats: the gate learns Sleep-EDF's scoring (R&K, 1990s technicians) and its Fpz-Cz montage;
+on a Muse it needs retraining or at least re-validating, ideally with the headband's
+accelerometer and heart rate as extra inputs.
+
 ## Layout
 
 ```
@@ -297,6 +371,9 @@ src/cloop/gru.py        small GRU timing model (optional `gru` extra)
 src/cloop/phase05.py    learning curves on all Sleep-EDF nights (cloop-timing)
 src/cloop/baseline.py   trigger point + Portiloop comparison (cloop-baseline)
 src/cloop/phase06.py    rising-flank timing model + relative gate, by age (cloop-phase06)
+src/cloop/stage.py      learned causal sleep-stage gate
+src/cloop/phase07.py    learned gate vs hand-made gates, by age (cloop-phase07)
+src/cloop/pipeline.py   the default pipeline: fit / plan / save / load (cloop-train)
 tests/                  synthetic-signal sanity tests, causality test for the model
 ```
 
@@ -304,8 +381,7 @@ tests/                  synthetic-signal sanity tests, causality test for the mo
 
 - ~~**Phase 0.5** — more training data for the timing model; try a small GRU~~ (done, above).
 - ~~**Phase 0.6** — timing model on the rising-flank trigger; relative gate~~ (done, above).
-- **Phase 0.7** — learned causal sleep-stage gate (trained on the Sleep-EDF hypnograms) to
-  cut wake/REM clicks in older sleepers; make the rising-flank trigger + ridge the default.
+- ~~**Phase 0.7** — learned stage gate; rising-flank + ridge as the default~~ (done, above).
 - **Phase 1** — live streaming from Muse S / OpenBCI via BrainFlow, log only, no sound.
   *Measure* real EEG + audio latency (loopback the audio into an EEG channel or a mic).
 - **Phase 2** — stimulation with randomised sham vs real nights, hard volume cap.
