@@ -102,3 +102,20 @@ def test_rising_flank_trigger_fires_after_the_trough_at_the_requested_level():
     assert np.all(late.trigger_idx > late.trough_idx)
     assert np.all(sw[late.trigger_idx] >= 0) and np.all(sw[late.trigger_idx - 1] < 0)  # upward zero crossing
     assert np.all(late.available_idx >= late.trigger_idx)
+
+
+def test_relative_gate_is_causal_and_never_stricter_than_fixed():
+    from cloop.detector import _relative_limit
+
+    rng = np.random.default_rng(0)
+    fs = 100.0
+    v = rng.gamma(2.0, 2.0, int(3600 * fs))
+    ok = rng.random(len(v)) < 0.7
+    cfg = DetectorConfig(rel_min_history_s=60)
+    lim = _relative_limit(v, ok, 2.5, 2.0, fs, cfg)
+    assert np.all(lim >= 2.5)
+    assert np.all(lim[: int(61 * fs)] == 2.5)  # fixed until there is enough history
+    cut = int(1800 * fs)
+    tampered = v.copy()
+    tampered[cut:] *= 100
+    assert np.array_equal(_relative_limit(tampered, ok, 2.5, 2.0, fs, cfg)[: cut + 1], lim[: cut + 1])

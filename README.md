@@ -221,6 +221,69 @@ Ages 25–34 are subjects 0–19; most of the rest are 50–101.
 3. Next modelling step: the timing model and confidence on top of the rising-flank trigger,
    and an age/person-adaptive gate.
 
+## Phase 0.6 — timing model on the rising-flank trigger, person-relative gate
+
+All 153 nights, trigger at r = +0.5 throughout, 20 subject-level splits, delays measured from
+when the trigger packet is available. "55 ms" = BLE EEG + wired audio: the click can't play
+earlier than trigger + 55 ms.
+
+```bash
+uv run cloop-phase06 --splits 20      # ~30 min; per-night rows in results/phase06_nights.csv
+```
+
+### Timing model: now a big win
+
+| fixed gate, all ages | no latency | 55 ms | clicks/h N2+N3 |
+|---|---|---|---|
+| best fixed delay | 55.6 ± 1.9 | 56.0 ± 1.5 | 22.5 |
+| **ridge timing model** | **64.6 ± 2.0** | **60.4 ± 1.4** | 22.5 |
+| ridge, top 50% confidence | 81.2 ± 0.6 | 74.0 ± 0.6 | 10.8 |
+
+From the trough, ridge added +5 points. From the rising flank it adds +9 (no latency) /
++4.4 (55 ms; latency removes the earliest delays, which is where much of the gain is). With
+confidence selection, **three in four clicks land within ±45° at realistic latency** — vs 35.5%
+for the Phase 0 pipeline on the same subjects.
+
+### Person-relative gate: opens locked-out nights, but lets wake in
+
+`DetectorConfig(gate_relative=True, hf_rel=k, eye_rel=k)`: each veto limit becomes
+max(fixed limit, k × the person's running median over delta-dominant seconds). Never stricter
+than the fixed gate. 55 ms latency, ridge timing:
+
+| gate | nights with no clicks | clicks/h | % in N2/N3 | % in wake/REM | % within ±45° |
+|---|---|---|---|---|---|
+| fixed (Phase 0) | 7.7% | 22.5 | 94.2 | 4.8 | 60.4 |
+| relative, muscle veto only (k = 2) | 5.9% | 27.1 | 88.6 | 10.0 | 60.8 |
+| relative k = 1.25 | **0%** | 30.2 | 88.6 | 9.7 | 60.0 |
+| relative k = 1.5 | 0% | 36.3 | 85.1 | 12.8 | 58.9 |
+| relative k = 2 | 0% | 48.5 | 78.8 | 18.7 | 58.3 |
+
+By age (k = 1.25 vs fixed):
+
+| age | fixed: no-click nights / % wake-REM | k = 1.25: no-click nights / % wake-REM |
+|---|---|---|
+| ≤ 40 | 0% / 0.8 | 0% / 2.0 |
+| 41–60 | 0% / 4.9 | 0% / **12.8** |
+| 61–80 | 9.5% / 1.2 | **0% / 2.8** |
+| 81+ | 23.8% / **35.2** | 0% / 36.2 |
+
+- For 61–80 the relative gate is a clean fix: no locked-out nights, still 95% in N2/N3.
+- For 41–60 it lets wake in; the fixed gate was fine there.
+- **For 81+ even the fixed gate puts a third of clicks in wake/REM.** The problem in very old
+  sleepers isn't that the gate is too strict, it's that a single frontal channel's band powers
+  can't tell their wake from their sleep. A relative threshold can't fix that.
+
+No gate variant dominates, so the default stays the fixed gate.
+
+### What we learned
+
+1. **Rising-flank trigger + ridge + confidence** is the pipeline to take into hardware:
+   ~60% of all clicks / ~74% of confident clicks within ±45° at 55 ms latency, all ages.
+2. Gate thresholds that are relative to the person fix the "locked out" failure for 61–80, but
+   the real limit is **telling wake from sleep** in older people. That needs a better
+   stage classifier (causal, learned from the hypnograms) and/or the extra sensors a headband
+   has (accelerometer, PPG heart rate) — not threshold tuning.
+
 ## Layout
 
 ```
@@ -233,14 +296,16 @@ src/cloop/phase0.py     tune / held-out evaluation / plots
 src/cloop/gru.py        small GRU timing model (optional `gru` extra)
 src/cloop/phase05.py    learning curves on all Sleep-EDF nights (cloop-timing)
 src/cloop/baseline.py   trigger point + Portiloop comparison (cloop-baseline)
+src/cloop/phase06.py    rising-flank timing model + relative gate, by age (cloop-phase06)
 tests/                  synthetic-signal sanity tests, causality test for the model
 ```
 
 ## Roadmap
 
 - ~~**Phase 0.5** — more training data for the timing model; try a small GRU~~ (done, above).
-- **Phase 0.6** — timing model on the rising-flank trigger; relative (person-adaptive) gate
-  thresholds so older sleepers aren't locked out; re-check on MASS if access is granted.
+- ~~**Phase 0.6** — timing model on the rising-flank trigger; relative gate~~ (done, above).
+- **Phase 0.7** — learned causal sleep-stage gate (trained on the Sleep-EDF hypnograms) to
+  cut wake/REM clicks in older sleepers; make the rising-flank trigger + ridge the default.
 - **Phase 1** — live streaming from Muse S / OpenBCI via BrainFlow, log only, no sound.
   *Measure* real EEG + audio latency (loopback the audio into an EEG channel or a mic).
 - **Phase 2** — stimulation with randomised sham vs real nights, hard volume cap.

@@ -88,3 +88,14 @@ def load_subject(subject: int, channel: str = "EEG Fpz-Cz", night: int = 1) -> R
     pad = int(30 * 60 * sfreq)
     a, b = max(asleep[0] - pad, 0), min(asleep[-1] + pad, len(eeg))
     return Recording(subject, eeg[a:b], sfreq, stages[a:b], night)
+
+
+def ages() -> dict[int, int]:
+    """Subject -> age (Sleep-EDF SC-subjects.xls, fetched once)."""
+    import pandas as pd
+
+    path = DATA_DIR / "SC-subjects.xls"
+    if not path.exists():
+        urllib.request.urlretrieve(f"{MIRROR}/sleep-edfx/1.0.0/SC-subjects.xls", path)
+    df = pd.read_excel(path)
+    return dict(zip(df["subject"], df["age"]))

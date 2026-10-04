@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=3.0.6",
     "scikit-learn>=1.9.1",
     "scipy>=1.18.1",
+    "xlrd>=2.0.2",
     "yasa>=0.8.0",
 ]
 
@@ -20,6 +21,7 @@ dependencies = [
 cloop-phase0 = "cloop.phase0:main"
 cloop-timing = "cloop.phase05:main"
 cloop-baseline = "cloop.baseline:main"
+cloop-phase06 = "cloop.phase06:main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

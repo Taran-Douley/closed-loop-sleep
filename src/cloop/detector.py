@@ -55,6 +55,17 @@ class DetectorConfig:
     # without dropping deep sleep every time the gate blinks off for a few seconds.
     sustain_s: float = 120.0
     sustain_frac: float = 0.8
+    # Person-relative gate (Phase 0.6). The fixed muscle (uV) and eye-movement (ratio)
+    # limits above were tuned on 25-34 year olds and lock many older sleepers out
+    # entirely: their sleep has more < 0.5 Hz power and a higher high-frequency floor.
+    # With gate_relative, each limit becomes max(fixed limit, k x this person's running
+    # median), the median taken over seconds that pass the delta test so far tonight.
+    # Never stricter than the fixed gate, so it can only open it for people whose
+    # baseline is high.
+    gate_relative: bool = False
+    hf_rel: float = 2.0
+    eye_rel: float = 2.0
+    rel_min_history_s: float = 600.0  # use the fixed limits until we have this much
 
 
 @dataclass
@@ -77,6 +88,21 @@ def _bp(lo, hi, fs, order=2):
     return butter(order, [lo, hi], btype="band", fs=fs, output="sos")
 
 
+def _relative_limit(v: np.ndarray, ok: np.ndarray, fixed: float, k: float, fs: float, cfg: DetectorConfig) -> np.ndarray:
+    """Per-sample limit max(fixed, k x running median of v over past seconds where `ok`).
+    Causal: the limit in force during second s uses only seconds before s."""
+    step = int(fs)
+    secs = range(step - 1, len(v), step)  # last sample of each second
+    ranked: list[float] = []
+    lim = np.full(len(v), fixed, dtype=float)
+    for i, n in enumerate(secs):
+        if len(ranked) >= cfg.rel_min_history_s:
+            lim[n + 1 : n + 1 + step] = max(fixed, k * ranked[len(ranked) // 2])
+        if ok[n]:
+            insort(ranked, float(v[n]))
+    return lim
+
+
 def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray | None = None) -> Triggers:
     # A causal IIR filter gives identical output whether run packet-by-packet (with
     # carried state, as live code would) or over the whole array, so filter once.
@@ -87,10 +113,15 @@ def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray |
         alpha = 1.0 / (cfg.gate_tau_s * fs)
         ema = lambda v: lfilter([alpha], [1, alpha - 1], v)  # noqa: E731 -- causal exponential moving average
         p_delta, p_broad, p_hf = ema(delta**2), ema(broad**2), ema(hf**2)
-        gate_on = (p_delta / (p_broad + 1e-9) > cfg.delta_ratio_min) & (np.sqrt(p_hf) < cfg.hf_rms_max_uv)
+        delta_ok = p_delta / (p_broad + 1e-9) > cfg.delta_ratio_min
+        hf_rms = np.sqrt(p_hf)
+        hf_max = _relative_limit(hf_rms, delta_ok, cfg.hf_rms_max_uv, cfg.hf_rel, fs, cfg) if cfg.gate_relative else cfg.hf_rms_max_uv
+        gate_on = delta_ok & (hf_rms < hf_max)
         if cfg.eye_ratio_max is not None:
             p_eye = ema(sosfilt(_bp(0.16, 0.5, fs), eeg) ** 2)
-            gate_on &= p_eye / (p_delta + 1e-9) < cfg.eye_ratio_max
+            eye = p_eye / (p_delta + 1e-9)
+            eye_max = _relative_limit(eye, delta_ok, cfg.eye_ratio_max, cfg.eye_rel, fs, cfg) if cfg.gate_relative else cfg.eye_ratio_max
+            gate_on &= eye < eye_max
         gate_on[: int(cfg.gate_tau_s * fs)] = False  # EMA warm-up
         if cfg.sustain_s > 0:
             w = int(cfg.sustain_s * fs)
