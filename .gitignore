@@ -3,3 +3,5 @@ results/
 .venv/
 __pycache__/
 models/
+logs/
+*.stages.npy

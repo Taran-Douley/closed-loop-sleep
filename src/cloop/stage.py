@@ -40,18 +40,28 @@ def stage_features(eeg: np.ndarray, fs: float) -> np.ndarray:
     return np.hstack([raw, raw - _running_median(raw)])
 
 
+class RunningMedian:
+    """Per-column median of all rows so far, refreshed every MEDIAN_EVERY_S rows (shared
+    by the offline features and the streaming pipeline)."""
+
+    def __init__(self, n_cols: int):
+        self.ranked = [[] for _ in range(n_cols)]
+        self.count = 0
+        self.med = None
+
+    def update(self, row: np.ndarray) -> np.ndarray:
+        for r, v in zip(self.ranked, row.tolist()):
+            insort(r, v)
+        if self.count % MEDIAN_EVERY_S == 0:
+            self.med = np.array([r[len(r) // 2] for r in self.ranked])
+        self.count += 1
+        return self.med
+
+
 def _running_median(F: np.ndarray) -> np.ndarray:
-    """Per-column median of rows seen so far (refreshed every MEDIAN_EVERY_S rows), causal."""
-    out = np.empty_like(F)
-    ranked = [[] for _ in range(F.shape[1])]
-    med = F[0].copy()
-    for s in range(len(F)):
-        for j in range(F.shape[1]):
-            insort(ranked[j], F[s, j])
-        if s % MEDIAN_EVERY_S == 0:
-            med = np.array([r[len(r) // 2] for r in ranked])
-        out[s] = med
-    return out
+    """Causal per-column running median of the rows of F."""
+    rm = RunningMedian(F.shape[1])
+    return np.array([rm.update(row) for row in F]) if len(F) else np.empty_like(F)
 
 
 def gate_from_prob(prob: np.ndarray, n_samples: int, fs: float, threshold: float) -> np.ndarray:

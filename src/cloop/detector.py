@@ -106,6 +106,70 @@ def _relative_limit(v: np.ndarray, ok: np.ndarray, fixed: float, k: float, fs: f
     return lim
 
 
+class TroughTracker:
+    """Per-sample trough / rising-flank trigger logic, shared by the offline detect()
+    and the streaming pipeline (stream.py) so the two can't drift apart.
+
+    step(n, x, on) takes sample n of the causal slow-wave signal and the gate state, and
+    returns (trough_idx, zc_idx, threshold, confirm_idx) when a trigger fires: confirm_idx
+    is the sample that confirmed it (trough + 1, or the rising-flank sample)."""
+
+    def __init__(self, cfg: DetectorConfig, fs: float):
+        self.cfg = cfg
+        self.lockout = int(cfg.lockout_s * fs)
+        self.max_wait = int(cfg.trigger_max_wait_s * fs)
+        self.pending = None  # (trough, zc, threshold, depth) waiting for the rising-flank trigger
+        self.prev = 0.0
+        self.zc = -1
+        self.armed = False  # signal has crossed below threshold, waiting for the minimum
+        self.spent = False  # already handled this negative half-wave
+        self.last_trigger = -self.lockout
+        self.thr = cfg.trough_uv
+        self.history: deque[float] = deque(maxlen=cfg.adapt_window)  # arrival order, for eviction
+        self.ranked: list[float] = []  # same values kept sorted, for O(log n) percentiles
+        self.cur_min = 0.0  # minimum of the current negative half-wave
+
+    def step(self, n: int, x: float, on: bool):
+        cfg, prev, out = self.cfg, self.prev, None
+        if prev >= 0 > x:
+            self.zc = n
+            self.spent = False
+            self.cur_min = 0.0
+        elif prev < 0 <= x and cfg.threshold == "adaptive":
+            # half-wave finished: learn its depth (only from sleep we'd stimulate in)
+            if on:
+                if len(self.history) == self.history.maxlen:
+                    del self.ranked[bisect_left(self.ranked, self.history[0])]
+                self.history.append(self.cur_min)
+                insort(self.ranked, self.cur_min)
+                if len(self.ranked) >= cfg.adapt_min_history:
+                    self.thr = min(self.ranked[int(cfg.adapt_pct / 100 * (len(self.ranked) - 1))], cfg.adapt_floor_uv)
+        if x < 0:
+            self.cur_min = min(self.cur_min, x)
+        if self.pending is not None:
+            t0, z0, th0, depth = self.pending
+            if x >= cfg.trigger_rise * depth:
+                out = (t0, z0, th0, n)
+                self.last_trigger = t0
+                self.pending = None
+            elif n - t0 > self.max_wait or not on:
+                self.pending = None
+        if self.armed and x > prev:
+            # first rising sample after going below threshold -> trough was n-1
+            self.armed = False
+            self.spent = True
+            if on and n - 1 - self.last_trigger >= self.lockout and self.zc >= 0:
+                if cfg.trigger_rise is None:
+                    out = (n - 1, self.zc, self.thr, n)
+                    self.last_trigger = n - 1
+                else:
+                    self.pending = (n - 1, self.zc, self.thr, -prev)
+        elif x < self.thr and not self.spent:
+            self.armed = True
+        self.prev = x
+        return out
+
+
 def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray | None = None,
            gate_on: np.ndarray | None = None) -> Triggers:
     # A causal IIR filter gives identical output whether run packet-by-packet (with
@@ -140,68 +204,13 @@ def detect(eeg: np.ndarray, fs: float, cfg: DetectorConfig, stages: np.ndarray |
         frac_on = (cs[n] - cs[np.maximum(n - w, 0)]) / w  # causal: last w samples only
         gate_on &= frac_on >= cfg.sustain_frac
 
-    lockout = int(cfg.lockout_s * fs)
-    troughs, zcs, fired = [], [], []
-    pending = None  # (trough, zc, threshold, depth) waiting for the rising-flank trigger
-    max_wait = int(cfg.trigger_max_wait_s * fs)
-    prev = 0.0
-    zc = -1
-    armed = False  # signal has crossed below threshold, waiting for the minimum
-    spent = False  # already handled this negative half-wave
-    last_trigger = -lockout
-    thr = cfg.trough_uv
-    history: deque[float] = deque(maxlen=cfg.adapt_window)  # arrival order, for eviction
-    ranked: list[float] = []  # same values kept sorted, for O(log n) percentiles
-    cur_min = 0.0  # minimum of the current negative half-wave
-    thresholds = []
+    tracker = TroughTracker(cfg, fs)
+    events = [e for n, (x, on) in enumerate(zip(sw.tolist(), gate_on.tolist())) if (e := tracker.step(n, x, on))]
+    troughs, zcs, thresholds, confirmed = (list(c) for c in zip(*events)) if events else ([], [], [], [])
 
-    for n, (x, on) in enumerate(zip(sw.tolist(), gate_on.tolist())):
-        if prev >= 0 > x:
-            zc = n
-            spent = False
-            cur_min = 0.0
-        elif prev < 0 <= x and cfg.threshold == "adaptive":
-            # half-wave finished: learn its depth (only from sleep we'd stimulate in)
-            if on:
-                if len(history) == history.maxlen:
-                    del ranked[bisect_left(ranked, history[0])]
-                history.append(cur_min)
-                insort(ranked, cur_min)
-                if len(ranked) >= cfg.adapt_min_history:
-                    thr = min(ranked[int(cfg.adapt_pct / 100 * (len(ranked) - 1))], cfg.adapt_floor_uv)
-        if x < 0:
-            cur_min = min(cur_min, x)
-        if pending is not None:
-            t0, z0, th0, depth = pending
-            if x >= cfg.trigger_rise * depth:
-                troughs.append(t0)
-                zcs.append(z0)
-                thresholds.append(th0)
-                fired.append(n)
-                last_trigger = t0
-                pending = None
-            elif n - t0 > max_wait or not on:
-                pending = None
-        if armed and x > prev:
-            # first rising sample after going below threshold -> trough was n-1
-            armed = False
-            spent = True
-            if on and n - 1 - last_trigger >= lockout and zc >= 0:
-                if cfg.trigger_rise is None:
-                    troughs.append(n - 1)
-                    zcs.append(zc)
-                    thresholds.append(thr)
-                    last_trigger = n - 1
-                else:
-                    pending = (n - 1, zc, thr, -prev)
-        elif x < thr and not spent:
-            armed = True
-        prev = x
-
-    troughs = np.array(troughs, int)
-    fired = np.array(fired, int) if cfg.trigger_rise is not None else None
-    confirmed = troughs + 1 if fired is None else fired  # trough: needed one rising sample to confirm the minimum
+    troughs, confirmed = np.array(troughs, int), np.array(confirmed, int)
     avail = (confirmed // cfg.chunk) * cfg.chunk + cfg.chunk - 1  # end of that packet
+    fired = confirmed if cfg.trigger_rise is not None else None
     return Triggers(troughs, np.array(zcs, int), avail, gate_on, np.array(thresholds), trigger_idx=fired)
 
 

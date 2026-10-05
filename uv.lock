@@ -28,6 +28,18 @@ wheels = [
 ]
 
 [[package]]
+name = "brainflow"
+version = "5.23.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "setuptools" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/6c/c92d1476bc58592e20d6fc1688f710036c1d05e53f48bd84f2af593b728e/brainflow-5.23.0-py3-none-any.whl", hash = "sha256:76817574fcc05dbb6f02e775149f5e400a4b1ebbf757e72a407c0aee4e372be5", size = 31389383, upload-time = "2026-09-13T20:47:58.486Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -172,6 +184,7 @@ name = "cloop"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "brainflow" },
     { name = "matplotlib" },
     { name = "mne" },
     { name = "numpy" },
@@ -195,6 +208,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "brainflow", specifier = ">=5.23.0" },
     { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "mne", specifier = ">=1.13.2" },
     { name = "numpy", specifier = ">=2.5.3" },

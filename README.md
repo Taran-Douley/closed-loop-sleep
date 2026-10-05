@@ -358,6 +358,53 @@ Caveats: the gate learns Sleep-EDF's scoring (R&K, 1990s technicians) and its Fp
 on a Muse it needs retraining or at least re-validating, ideally with the headband's
 accelerometer and heart rate as extra inputs.
 
+## Phase 1 — live, log only
+
+### Step 1: streaming pipeline + BrainFlow runner (no hardware needed)
+
+- `stream.StreamingLoop` runs the default pipeline packet by packet, carrying every filter's
+  state. It shares the per-sample logic with the offline code (`TroughTracker`,
+  `RunningMedian`), and gives **exactly** the clicks of `ClosedLoop.plan()` — checked on 3 h
+  of a real night (251/251 clicks, identical times) and in `tests/test_stream.py`. ~60× real
+  time with 4-sample packets; ~1 ms per packet live.
+- `stream.Resampler` brings 256 Hz (Muse) / 250 Hz (OpenBCI) down to the models' 100 Hz,
+  causally (IIR anti-alias + interpolation, ≤ 10 ms lag at slow-wave frequencies).
+- `cloop-live` streams any BrainFlow board into the pipeline and logs what it *would* play —
+  no sound — with wall-clock issue times, slack, packet arrival times, P(N2/N3) per second
+  and the processed signal. `cloop-report <logdir>` scores a log afterwards.
+- `cloop-export-playback` writes a Sleep-EDF night as a Muse-format file for BrainFlow's
+  playback board, so the whole chain can be exercised without a headband.
+
+Checks so far:
+
+- **Muse-format path**: 45 min of a real night (awake → N3) exported at 256 Hz, pushed in
+  12-sample packets through the resampler and streaming pipeline: the same 87 waves as the
+  offline pipeline on the original 100 Hz signal (87/87 triggers within 20 ms), 56% vs 59%
+  within ±45°, 100% in N2/N3. The 3-point gap is the resampler's small phase shift.
+- **BrainFlow playback, real time**: signal arrives intact (r = 0.998 with the original), the
+  gate stays shut through pre-sleep wake, ~1 ms processing per packet. One run hit a 14.6 min
+  stall (the machine paused) followed by a burst of backlog — which crashed the first version.
+  Now any packet size, including a burst, gives exactly the offline clicks (tested), and the
+  runner warns on gaps and marks clicks that would have been late. Expect the same from BLE
+  dropouts on a real headband.
+- BrainFlow 5.23's playback board can't seek (`set_index_percents` is ignored) and runs at
+  ~2/3 real time here; trim files with `cloop-export-playback --start-min/--minutes`.
+
+```bash
+uv run cloop-train                                                  # once
+uv run cloop-live --board muse_s_bled --channel AF7                 # a night, log only
+uv run cloop-report logs/<time>
+```
+
+### Step 2: hardware (next)
+
+Recommended: **Muse S + BLED112 dongle** (`--board muse_s_bled`, steadier than OS
+Bluetooth), **wired** audio into flat sleep headphones. Then: measure audio latency (output →
+mic loopback) and EEG latency (tap the headband while the mic records it); record 3–5
+log-only nights; stage them with YASA as pseudo-labels; check targeting / gate / slack with
+`cloop-report`, and retrain the stage gate on Muse data if it drifts. OpenBCI Cyton (gel,
+8 ch) is the better validation instrument but much harder to sleep in.
+
 ## Layout
 
 ```
@@ -374,6 +421,8 @@ src/cloop/phase06.py    rising-flank timing model + relative gate, by age (cloop
 src/cloop/stage.py      learned causal sleep-stage gate
 src/cloop/phase07.py    learned gate vs hand-made gates, by age (cloop-phase07)
 src/cloop/pipeline.py   the default pipeline: fit / plan / save / load (cloop-train)
+src/cloop/stream.py     streaming pipeline + causal resampler
+src/cloop/live.py       BrainFlow runner, playback export, log report (cloop-live / -export-playback / -report)
 tests/                  synthetic-signal sanity tests, causality test for the model
 ```
 
@@ -383,7 +432,7 @@ tests/                  synthetic-signal sanity tests, causality test for the mo
 - ~~**Phase 0.6** — timing model on the rising-flank trigger; relative gate~~ (done, above).
 - ~~**Phase 0.7** — learned stage gate; rising-flank + ridge as the default~~ (done, above).
 - **Phase 1** — live streaming from Muse S / OpenBCI via BrainFlow, log only, no sound.
-  *Measure* real EEG + audio latency (loopback the audio into an EEG channel or a mic).
+  *Measure* real EEG + audio latency. Step 1 (software) done, above; step 2 needs hardware.
 - **Phase 2** — stimulation with randomised sham vs real nights, hard volume cap.
 - **Phase 3** — YASA analysis, publish code + methods + results (including null results).
 

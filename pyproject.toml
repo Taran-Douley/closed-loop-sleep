@@ -7,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "brainflow>=5.23.0",
     "matplotlib>=3.11.2",
     "mne>=1.13.2",
     "numpy>=2.5.3",
@@ -24,6 +25,9 @@ cloop-baseline = "cloop.baseline:main"
 cloop-phase06 = "cloop.phase06:main"
 cloop-phase07 = "cloop.phase07:main"
 cloop-train = "cloop.pipeline:main"
+cloop-live = "cloop.live:main"
+cloop-export-playback = "cloop.live:export_playback"
+cloop-report = "cloop.live:report"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
