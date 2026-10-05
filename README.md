@@ -6,29 +6,28 @@ clicks timed to land on the up-state of slow oscillations (Ngo et al., 2013).
 > **Not a medical device.** This is a research/hobby project. It makes no claim to improve
 > sleep, memory or health. Don't use it in place of medical care.
 
-## Current default pipeline (Phase 0.7)
+## Current default pipeline (Phase 0.7 + timing accuracy)
 
 ```
 learned causal stage gate (P(N2/N3) >= 0.8, sustained 2 min)
   -> adaptive "deepest 5%" threshold, trigger on the rising flank at +0.5 x trough depth
-  -> ridge timing model picks the delay on a 5 ms grid (never sooner than EEG + audio latency)
+  -> ridge timing model (soft targets, delays stretched x1.3 above the latency floor)
+     picks the delay on a 5 ms grid (never sooner than EEG + audio latency)
   -> optional: click only on the most confident half of waves
 ```
 
-Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired audio):
+Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired audio),
+10 splits, clicks scored against the true phase at the exact click time:
 
-| | Phase 0 pipeline | **default (Phase 0.7)** | + top 50% confidence |
-|---|---|---|---|
-| clicks within ±45° of the up-state | 35.5% | 56.8% | 68.9% |
-| on-target clicks / hour of N2+N3 | ~10 | **37.6** | 22.3 |
-| clicks in wake/REM | 5.8% | **0.9%** | 0.9% |
+| | Phase 0 pipeline | Phase 0.7 | **default** | + top 50% confidence |
+|---|---|---|---|---|
+| clicks within ±45° of the up-state | 35.5% | 57.2% | **60.2%** | 73.2% |
+| on-target clicks / hour of N2+N3 | ~10 | 37.8 | **39.8** | 23.8 |
+| clicks in wake/REM | 5.8% | 0.9% | **0.9%** | 0.8% |
 
-The table is the Phase 0.7 run, with delays on the model's 25 ms training grid. Since then the
-predicted score curve is spline-interpolated and the delay chosen every 5 ms
-(`ClosedLoop.delay_step_s`). For ridge, that's what training on the finer grid would give.
-Against the true phase at the exact click time (held-out subjects, all real N2/N3 waves,
-10 splits): **56.4% → 57.7% within ±45°** (+1.3 ± 0.2 points, better in 10/10 splits),
-mean error 48.0° → 46.7°. Clicks still land on average 14–18° *before* the up-state peak.
+(Phase 0 column as published. The Phase 0.7 column is its 25 ms run rescored at the exact
+click time, which is why it reads 57.2% here and 56.8% below.) See
+[Timing accuracy](#timing-accuracy-after-phase-07) for what changed.
 
 ```bash
 uv run cloop-train                  # fit on all 153 nights -> models/closed_loop.pkl (needs cloop-phase07's cache)
@@ -364,6 +363,44 @@ By age, learned p ≥ 0.8 vs fixed gate:
 Caveats: the gate learns Sleep-EDF's scoring (R&K, 1990s technicians) and its Fpz-Cz montage;
 on a Muse it needs retraining or at least re-validating, ideally with the headband's
 accelerometer and heart rate as extra inputs.
+
+## Timing accuracy (after Phase 0.7)
+
+Three changes to how the click delay is chosen. Same splits and learned gate (p ≥ 0.8) as
+Phase 0.7, but clicks are scored against the true phase at the exact click time.
+
+```bash
+uv run cloop-phase07 --splits 10 --delay-step 0.025                     # Phase 0.7, rescored
+uv run cloop-phase07 --splits 10 --delay-step 0.005                     # + 5 ms grid
+uv run cloop-phase07 --splits 10 --delay-step 0.005 --timing pipeline   # + soft targets, stretch
+```
+
+| | within ±45° | on-target/h | top 50% conf | gain, paired over splits |
+|---|---|---|---|---|
+| Phase 0.7 (25 ms grid) | 57.2 ± 0.9 | 37.8 | 69.6 | |
+| + 5 ms delay grid | 58.4 ± 1.1 | 38.6 | 72.1 | +1.3 ± 0.3 (10/10) |
+| **+ soft targets, alpha 1, stretch** | **60.2 ± 0.6** | **39.8** | **73.2** | +1.8 ± 0.7 (10/10) |
+
+By age, 25 ms → now: ≤ 40: 61.0 → 64.0%, 41–60: 59.5 → 62.4%, 61–80: 52.2 → 55.7%,
+81+: 50.5 → 53.2%.
+
+1. **5 ms delay grid.** The timing model is trained on a 25 ms grid. Its predicted curve is now
+   spline-interpolated and the best delay chosen every 5 ms (`ClosedLoop.delay_step_s`). The
+   model is linear and the targets are smooth over 25 ms, so this matches training on a 5 ms
+   grid directly (checked: +0.06 points).
+2. **Soft targets.** The model predicts exp(4 (cos − 1)) instead of cos(phase error). That's
+   closer to the hit-or-miss metric: a click 60° off scores 0.14 rather than 0.5. Training on
+   the hit indicator itself does about as well but is noisier. Ridge alpha 10 → 1 adds a little.
+3. **Stretch.** 44% of clicks sit at the latency floor. They have ~0° mean bias and 64% hit
+   rate. The rest were **31° early** and hit only 53%: ridge shrinks every wave's curve toward
+   the average one, which peaks near the floor, so slower waves got too-short delays. A
+   constant offset doesn't fix this (a learned one comes out at +1.5 ms). Scaling the delay
+   above the floor does: `d = floor + k (d − floor)`, with k fitted on the training data
+   (1.2–1.4 across splits; 1.3 on all nights).
+
+Also tried, on all real N2/N3 waves (hypnogram gate): an MLP (+1.2 but in only 8/10 splits,
+with high variance), random RBF features + ridge (+0.6), stronger ridge (worse). The latency
+floor is the bigger limit: Phase 0.6 measured 64.6% at zero latency vs 60.4% at 55 ms.
 
 ## Phase 1 — live, log only
 

@@ -71,16 +71,14 @@ def test_resampler_delay_is_compensated():
         lead = np.array([c.heard_s + kw.get("signal_delay_s", 0) - c.available_idx / fs for c in clicks])
         assert lead.min() >= loop.latency_s + kw.get("signal_delay_s", 0) + kw.get("extra_wait_s", 0) - 1e-9
         runs[name] = {c.trigger_idx: c for c in clicks}
-    # Delays come from a 25 ms grid, so a ~10 ms lag can't show up as a ~10 ms shift per click.
-    # What compensation guarantees: each click moves exactly delay_s earlier, unless the larger
-    # latency budget pushed its delay to a later grid step.
+    # The chosen delays differ between the runs (the larger budget moves the latency floor, and
+    # the timing model's stretch is anchored to it), so compare bookkeeping, not delays: a
+    # compensated click is heard delay_s earlier than its chosen delay alone would put it.
     shared = runs["raw"].keys() & runs["comp"].keys()
     assert len(shared) > 0.8 * len(off.times_s)
-    same = [k for k in shared if runs["comp"][k].delay_s == runs["raw"][k].delay_s]
-    assert len(same) > 0.8 * len(shared)
-    for k in same:
-        assert np.isclose(runs["comp"][k].heard_s, runs["raw"][k].heard_s - rs.delay_s)
-    assert all(runs["comp"][k].delay_s > runs["raw"][k].delay_s for k in shared - set(same))
+    for name, shift in (("raw", 0.0), ("comp", rs.delay_s)):
+        for c in runs[name].values():
+            assert np.isclose(c.heard_s, c.available_idx / fs + c.delay_s - shift)
 
     def err(name):  # click time vs offline on the original signal, matching triggers within 2 samples
         cs = runs[name].values()

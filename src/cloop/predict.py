@@ -88,10 +88,16 @@ class TimingModel:
     kind: str = "ridge"  # "ridge" | "mlp" | "gru" (needs the `gru` extra: torch)
     seed: int = 0
     delays: np.ndarray = field(default_factory=lambda: DELAYS)  # FLANK_DELAYS for rising-flank triggers
+    alpha: float = 10.0  # ridge strength
+    target: str = "cos"  # "cos" | "soft": exp(4 (cos - 1)), which rewards near-misses less than cos does
+    stretch: float = 1.0  # delays above the latency floor are scaled by this (see fit_stretch)
 
     def fit(self, X: np.ndarray, Y: np.ndarray) -> "TimingModel":
+        """Y: cos(phase error) at each delay (`targets`), whatever `target` is."""
+        if self.target == "soft":
+            Y = np.exp(4 * (Y - 1))
         if self.kind == "ridge":
-            reg = Ridge(alpha=10.0)
+            reg = Ridge(alpha=self.alpha)
         elif self.kind == "mlp":
             reg = MLPRegressor(hidden_layer_sizes=(64, 32), alpha=1e-3, early_stopping=True,
                                max_iter=300, random_state=self.seed)
@@ -116,9 +122,33 @@ class TimingModel:
         if step is not None:
             delays = np.arange(self.delays[0], self.delays[-1] + 1e-9, step)
             curve = curve @ _spline_matrix(self.delays, delays).T
-        curve = np.where(delays[None, :] >= min_delay - 1e-9, curve, -np.inf)
+        allowed = delays >= min_delay - 1e-9
+        curve = np.where(allowed[None, :], curve, -np.inf)
         best = curve.argmax(axis=1)
-        return delays[best], curve[np.arange(len(curve)), best]
+        delay = delays[best]
+        if self.stretch != 1.0:
+            floor = delays[allowed.argmax()]
+            delay = np.clip(floor + self.stretch * (delay - floor), floor, delays[-1])
+        return delay, curve[np.arange(len(curve)), best]
+
+    def fit_stretch(self, X: np.ndarray, Y: np.ndarray, min_delay: float, step: float | None = None) -> "TimingModel":
+        """Ridge shrinks every wave's curve toward the average one, whose peak is near the
+        latency floor, so for slower waves it picks too short a delay (clicks ~30° early).
+        Scale delays above the floor by the factor that maximises clicks within ±45° on
+        (X, Y), the training data. Y as in `fit`; its cos is spline-interpolated between
+        grid points to score delays off the grid."""
+        self.stretch = 1.0
+        d, _ = self.predict(X, min_delay, step)
+        grid = self.delays if step is None else np.arange(self.delays[0], self.delays[-1] + 1e-9, step)
+        floor = grid[(grid >= min_delay - 1e-9).argmax()]
+        best_k, best_hit = 1.0, -1.0
+        for k in np.arange(0.9, 1.81, 0.05):
+            dk = np.clip(floor + k * (d - floor), floor, self.delays[-1])
+            hit = np.mean(_interp_rows(Y, self.delays, dk) >= np.cos(np.pi / 4))
+            if hit > best_hit + 1e-12:
+                best_k, best_hit = float(k), hit
+        self.stretch = best_k
+        return self
 
 
 def _spline_matrix(x: np.ndarray, x_new: np.ndarray) -> np.ndarray:
@@ -130,3 +160,12 @@ def _spline_matrix(x: np.ndarray, x_new: np.ndarray) -> np.ndarray:
 
 
 _SPLINES: dict = {}
+
+
+def _interp_rows(Y: np.ndarray, x: np.ndarray, x_row: np.ndarray) -> np.ndarray:
+    """Each row of Y (values at x) cubic-spline interpolated at its own point x_row[i]."""
+    c = CubicSpline(x, Y, axis=1).c  # (4, len(x) - 1, len(Y)): cubic coefficients per interval
+    j = np.clip(np.searchsorted(x, x_row, side="right") - 1, 0, len(x) - 2)
+    dx = x_row - x[j]
+    rows = np.arange(len(Y))
+    return ((c[0, j, rows] * dx + c[1, j, rows]) * dx + c[2, j, rows]) * dx + c[3, j, rows]

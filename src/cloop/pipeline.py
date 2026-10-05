@@ -1,10 +1,10 @@
-"""The default closed-loop pipeline (as of Phase 0.7), as one object to train and run.
+"""The default closed-loop pipeline (Phase 0.7 + timing accuracy), as one object to train and run.
 
     learned stage gate (p >= 0.8) -> adaptive threshold, rising-flank trigger (r = +0.5)
-    -> ridge timing model (delay >= expected latency) -> optional confidence cut
+    -> ridge timing model (soft targets, stretch; delay >= expected latency, 5 ms grid) -> optional confidence cut
 
-Held-out Sleep-EDF, all ages, 55 ms latency: ~57% of clicks within ±45° of the up-state,
-~38 on-target clicks per hour of N2+N3, < 1% of clicks in wake/REM (README, Phase 0.7).
+Held-out Sleep-EDF, all ages, 55 ms latency: ~60% of clicks within ±45° of the up-state,
+~40 on-target clicks per hour of N2+N3, < 1% of clicks in wake/REM (README).
 
     uv run cloop-train                      # fit on all 153 nights, save models/closed_loop.pkl
     loop = ClosedLoop.load("models/closed_loop.pkl")
@@ -25,6 +25,13 @@ import numpy as np
 from .detector import DetectorConfig, Triggers, detect
 from .predict import FLANK_DELAYS, TimingModel, features
 from .stage import StageGate, gate_from_prob, stage_features
+
+
+def fit_timing(X: np.ndarray, Y: np.ndarray, latency_s: float, step: float | None) -> TimingModel:
+    """The default timing model: ridge (alpha 1) on soft targets, delays stretched above the
+    latency floor by a factor fitted on the same data (~1.3). Held-out subjects, all real
+    N2/N3 waves, 55 ms: +1.9 points within ±45° over ridge on cos targets (README)."""
+    return TimingModel("ridge", delays=FLANK_DELAYS, alpha=1.0, target="soft").fit(X, Y).fit_stretch(X, Y, latency_s, step)
 
 
 @dataclass
@@ -52,7 +59,7 @@ class ClosedLoop:
         X / Y: timing features and score-vs-FLANK_DELAYS targets of rising-flank triggers
         in real N2/N3 (hypnogram-gated), from the training nights."""
         self.stage_gate = StageGate(seed=seed).fit(stage_F, is_n2n3)
-        self.timing = TimingModel("ridge", delays=FLANK_DELAYS).fit(X, Y)
+        self.timing = fit_timing(X, Y, self.latency_s, self.delay_step_s)
         conf = self.timing.predict(X, self.latency_s, self.delay_step_s)[1]
         self.conf_cut = np.quantile(conf, 1 - self.keep) if self.keep < 1 else -np.inf
         return self
