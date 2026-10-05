@@ -11,7 +11,7 @@ clicks timed to land on the up-state of slow oscillations (Ngo et al., 2013).
 ```
 learned causal stage gate (P(N2/N3) >= 0.8, sustained 2 min)
   -> adaptive "deepest 5%" threshold, trigger on the rising flank at +0.5 x trough depth
-  -> ridge timing model picks the delay (never sooner than EEG + audio latency)
+  -> ridge timing model picks the delay on a 5 ms grid (never sooner than EEG + audio latency)
   -> optional: click only on the most confident half of waves
 ```
 
@@ -22,6 +22,13 @@ Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired
 | clicks within ±45° of the up-state | 35.5% | 56.8% | 68.9% |
 | on-target clicks / hour of N2+N3 | ~10 | **37.6** | 22.3 |
 | clicks in wake/REM | 5.8% | **0.9%** | 0.9% |
+
+The table is the Phase 0.7 run, with delays on the model's 25 ms training grid. Since then the
+predicted score curve is spline-interpolated and the delay chosen every 5 ms
+(`ClosedLoop.delay_step_s`). For ridge, that's what training on the finer grid would give.
+Against the true phase at the exact click time (held-out subjects, all real N2/N3 waves,
+10 splits): **56.4% → 57.7% within ±45°** (+1.3 ± 0.2 points, better in 10/10 splits),
+mean error 48.0° → 46.7°. Clicks still land on average 14–18° *before* the up-state peak.
 
 ```bash
 uv run cloop-train                  # fit on all 153 nights -> models/closed_loop.pkl (needs cloop-phase07's cache)

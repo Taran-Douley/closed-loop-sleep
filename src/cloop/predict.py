@@ -20,6 +20,7 @@ a laptop or Raspberry Pi is microseconds.
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.interpolate import CubicSpline
 from scipy.signal import butter, sosfilt
 from sklearn.linear_model import Ridge
 from sklearn.neural_network import MLPRegressor
@@ -102,11 +103,30 @@ class TimingModel:
         self.pipe = make_pipeline(StandardScaler(), reg).fit(X, Y)
         return self
 
-    def predict(self, X: np.ndarray, min_delay: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    def predict(self, X: np.ndarray, min_delay: float = 0.0, step: float | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Returns (delay in seconds, confidence = predicted cos at that delay), choosing
-        only among delays >= min_delay (e.g. the expected EEG + audio latency)."""
+        only among delays >= min_delay (e.g. the expected EEG + audio latency).
+
+        step: choose on a finer grid than the model was trained on, by cubic-spline
+        interpolation of the predicted curve. For ridge this is what training on the finer
+        grid would give (the model is linear and the targets are smooth over 25 ms)."""
         if len(X) == 0:
             return np.empty(0), np.empty(0)
-        curve = np.where(self.delays[None, :] >= min_delay - 1e-9, self.pipe.predict(X), -np.inf)
+        curve, delays = self.pipe.predict(X), self.delays
+        if step is not None:
+            delays = np.arange(self.delays[0], self.delays[-1] + 1e-9, step)
+            curve = curve @ _spline_matrix(self.delays, delays).T
+        curve = np.where(delays[None, :] >= min_delay - 1e-9, curve, -np.inf)
         best = curve.argmax(axis=1)
-        return self.delays[best], curve[np.arange(len(curve)), best]
+        return delays[best], curve[np.arange(len(curve)), best]
+
+
+def _spline_matrix(x: np.ndarray, x_new: np.ndarray) -> np.ndarray:
+    """(len(x_new), len(x)) matrix taking values at x to their cubic spline at x_new."""
+    key = (x.tobytes(), x_new.tobytes())
+    if key not in _SPLINES:
+        _SPLINES[key] = CubicSpline(x, np.eye(len(x)), axis=0)(x_new)
+    return _SPLINES[key]
+
+
+_SPLINES: dict = {}

@@ -127,7 +127,8 @@ class StreamingLoop:
         scale = max(abs(self.buf_sw[trough - first]), 1e-6)
         row = np.concatenate([self.buf_sw[::DECIMATE] / scale, self.buf_delta[::DECIMATE] / scale,
                               [np.log(scale), (trough - zc) / self.fs, (avail - trough) / self.fs]])
-        delay, conf = self.loop.timing.predict(row[None, :], self.loop.latency_s + self.signal_delay_s + self.extra_wait_s)
+        delay, conf = self.loop.timing.predict(row[None, :], self.loop.latency_s + self.signal_delay_s + self.extra_wait_s,
+                                               self.loop.delay_step_s)
         if conf[0] < self.loop.conf_cut:
             return None
         heard = avail / self.fs + delay[0] - self.signal_delay_s

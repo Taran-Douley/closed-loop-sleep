@@ -42,6 +42,7 @@ class ClosedLoop:
     eeg_latency_s: float = 0.040  # acquisition -> trigger reaches software
     audio_latency_s: float = 0.015  # play command -> sound
     keep: float = 1.0  # click on this fraction of waves (most confident first); 0.5 = +12 points, half the dose
+    delay_step_s: float = 0.005  # choose the click delay on this grid (the timing model is trained on 25 ms)
     stage_gate: StageGate | None = None
     timing: TimingModel | None = None
     conf_cut: float = -np.inf
@@ -52,7 +53,7 @@ class ClosedLoop:
         in real N2/N3 (hypnogram-gated), from the training nights."""
         self.stage_gate = StageGate(seed=seed).fit(stage_F, is_n2n3)
         self.timing = TimingModel("ridge", delays=FLANK_DELAYS).fit(X, Y)
-        conf = self.timing.predict(X, self.latency_s)[1]
+        conf = self.timing.predict(X, self.latency_s, self.delay_step_s)[1]
         self.conf_cut = np.quantile(conf, 1 - self.keep) if self.keep < 1 else -np.inf
         return self
 
@@ -65,7 +66,7 @@ class ClosedLoop:
         gate = gate_from_prob(prob, len(eeg), fs, self.stage_threshold)
         cfg = DetectorConfig(**{**self.detector.__dict__, "gate": "external"})
         trg = detect(eeg, fs, cfg, gate_on=gate)
-        delay, conf = self.timing.predict(features(eeg, fs, trg), self.latency_s)
+        delay, conf = self.timing.predict(features(eeg, fs, trg), self.latency_s, self.delay_step_s)
         keep = conf >= self.conf_cut
         trg = trg.subset(keep)
         heard = trg.available_idx / fs + delay[keep]
