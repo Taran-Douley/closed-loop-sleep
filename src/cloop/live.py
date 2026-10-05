@@ -75,7 +75,8 @@ def main():
 
     out = Path(args.logs) / datetime.now().strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
-    resampler, live = Resampler(fs), StreamingLoop(loop, 100.0)
+    resampler = Resampler(fs)
+    live = StreamingLoop(loop, 100.0, signal_delay_s=resampler.delay_s, extra_wait_s=resampler.wait_s)
     f_clicks = open(out / "clicks.csv", "w", newline="")
     f_packets = open(out / "packets.csv", "w", newline="")
     w_clicks, w_packets = csv.writer(f_clicks), csv.writer(f_packets)
@@ -127,7 +128,8 @@ def main():
         f_clicks.close()
         f_packets.close()
         np.savez_compressed(out / "raw.npz", eeg_100hz=np.concatenate(raw) if raw else np.empty(0), fs=100.0,
-                            device_fs=fs, t0_wall=t0_wall if t0_wall is not None else np.nan)
+                            device_fs=fs, t0_wall=t0_wall if t0_wall is not None else np.nan,
+                            signal_delay_s=resampler.delay_s)
         np.savetxt(out / "stage.csv", np.array(live.prob_log), fmt="%.4f", header="P(N2/N3) per second", comments="")
         print(f"stopped: {live.n / 100 / 60:.1f} min processed, {n_clicks} clicks logged ({n_late} would have been late) in {out}")
 
@@ -186,10 +188,12 @@ def report():
     packets = pd.read_csv(d / "packets.csv")
     print(f"{d}: {len(eeg) / fs / 60:.1f} min processed, {len(clicks)} clicks")
 
-    # targeting, against the phase of the signal that was actually processed (offline truth)
+    # targeting, against the phase of the signal that was actually processed (offline truth).
+    # That signal lags the brain by the resampler's delay; heard_s is in brain time.
+    lag = float(z["signal_delay_s"]) if "signal_delay_s" in z else 0.0
     phase = np.angle(hilbert(sosfiltfilt(butter(2, (0.5, 2.0), btype="band", fs=fs, output="sos"), eeg)))
     if len(clicks):
-        idx = np.clip(np.round(clicks.heard_s.to_numpy() * fs).astype(int), 0, len(eeg) - 1)
+        idx = np.clip(np.round((clicks.heard_s.to_numpy() + lag) * fs).astype(int), 0, len(eeg) - 1)
         err = np.angle(np.exp(1j * phase[idx]))
         print(f"  targeting: {100 * np.mean(np.abs(err) <= np.pi / 4):.1f}% within ±45° of the up-state, "
               f"mean error {np.degrees(np.angle(np.mean(np.exp(1j * err)))):+.0f}°")

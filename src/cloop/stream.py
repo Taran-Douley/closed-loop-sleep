@@ -12,13 +12,13 @@ steps. Delays count from when a trigger's data was *acquired*; packets that arri
 (BLE buffering, a stall) eat into the latency budget, and the runner logs the slack.
 
 The models were trained at 100 Hz; devices at other rates (Muse 256 Hz, OpenBCI 250 Hz)
-go through `Resampler` first.
+go through `Resampler` first, and StreamingLoop compensates its delay.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.signal import butter, lfilter, lfilter_zi, sosfilt
+from scipy.signal import butter, group_delay, lfilter, lfilter_zi, sosfilt
 
 from .detector import DetectorConfig, TroughTracker
 from .pipeline import ClosedLoop
@@ -37,10 +37,16 @@ class Click:
 
 
 class StreamingLoop:
-    def __init__(self, loop: ClosedLoop, fs: float = 100.0):
+    """signal_delay_s: how far the input lags the brain (e.g. Resampler.delay_s); clicks are
+    moved that much earlier. extra_wait_s: worst-case extra time before a sample is
+    available (e.g. Resampler.wait_s). Both come out of the latency budget, so the chosen
+    delay always leaves the same slack for EEG + audio latency."""
+
+    def __init__(self, loop: ClosedLoop, fs: float = 100.0, signal_delay_s: float = 0.0, extra_wait_s: float = 0.0):
         if fs != 100.0:
             raise ValueError("models are trained at 100 Hz; wrap the device stream in Resampler")
         self.loop, self.fs, self.step = loop, fs, int(fs)
+        self.signal_delay_s, self.extra_wait_s = signal_delay_s, extra_wait_s
         self.cfg = DetectorConfig(**{**loop.detector.__dict__, "gate": "external"})
         bp = lambda lo, hi: butter(2, [lo, hi], btype="band", fs=fs, output="sos")  # noqa: E731
         self.sw_sos, self.delta_sos = bp(*self.cfg.sw_band), bp(0.5, 4.0)
@@ -121,25 +127,28 @@ class StreamingLoop:
         scale = max(abs(self.buf_sw[trough - first]), 1e-6)
         row = np.concatenate([self.buf_sw[::DECIMATE] / scale, self.buf_delta[::DECIMATE] / scale,
                               [np.log(scale), (trough - zc) / self.fs, (avail - trough) / self.fs]])
-        delay, conf = self.loop.timing.predict(row[None, :], self.loop.latency_s)
+        delay, conf = self.loop.timing.predict(row[None, :], self.loop.latency_s + self.signal_delay_s + self.extra_wait_s)
         if conf[0] < self.loop.conf_cut:
             return None
-        heard = avail / self.fs + delay[0]
+        heard = avail / self.fs + delay[0] - self.signal_delay_s
         return Click(confirm, avail, float(delay[0]), heard, heard - self.loop.audio_latency_s, float(conf[0]))
 
 
 class Resampler:
     """Causal resampling of a device stream to the models' 100 Hz.
 
-    Anti-alias with a 4th-order Butterworth low-pass at 40 Hz (IIR: ~1-2 ms phase delay at
-    slow-wave frequencies, versus ~60 ms for a comparable linear-phase FIR), then linear
-    interpolation at the output times. An output sample needs the next input sample, so
-    the stream runs at most one input sample (~4 ms) behind.
+    Anti-alias with a 4th-order Butterworth low-pass at 40 Hz, then linear interpolation at
+    the output times. The filter delays slow waves by a constant `delay_s` (~9.5 ms, flat
+    across 0.5-4 Hz), which StreamingLoop subtracts from click times; an output sample also
+    needs the next input sample, so it is available up to `wait_s` (one input sample) late.
+    Pass both to StreamingLoop(signal_delay_s=..., extra_wait_s=...).
     """
 
     def __init__(self, fs_in: float, fs_out: float = 100.0, cutoff: float = 40.0):
         self.fs_in, self.fs_out = fs_in, fs_out
         self.b, self.a = butter(4, cutoff, fs=fs_in)
+        self.delay_s = float(group_delay((self.b, self.a), w=[1.0], fs=fs_in)[1][0] / fs_in)
+        self.wait_s = 1.0 / fs_in
         self.zi = None
         self.t_next = 0.0  # time (s) of the next output sample
         self.last = None  # (time, value) of the last filtered input sample

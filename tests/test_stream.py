@@ -52,3 +52,38 @@ def test_resampler_is_causal_and_nearly_delay_free():
     rs2 = Resampler(fs_in)
     out2 = np.concatenate([rs2.push(x2[i : i + 12]) for i in range(0, len(x2), 12)])
     assert np.allclose(out[:cut], out2[:cut])
+
+
+def test_resampler_delay_is_compensated():
+    from scipy.signal import resample_poly
+
+    loop, eeg, fs, _ = _fitted()
+    off = loop.plan(eeg, fs)
+    x = resample_poly(eeg, 256, 100)  # as a 256 Hz headband would record it
+    rs = Resampler(256.0)
+    assert 0.005 < rs.delay_s < 0.015
+    y = np.concatenate([rs.push(x[i : i + 12]) for i in range(0, len(x), 12)])
+    t_off = {int(k): t for k, t in zip(off.triggers.trigger_idx, off.times_s)}
+    runs = {}
+    for name, kw in (("raw", {}), ("comp", dict(signal_delay_s=rs.delay_s, extra_wait_s=rs.wait_s))):
+        live = StreamingLoop(loop, fs, **kw)
+        clicks = [c for i in range(0, len(y), 5) for c in live.push(y[i : i + 5])]
+        lead = np.array([c.heard_s + kw.get("signal_delay_s", 0) - c.available_idx / fs for c in clicks])
+        assert lead.min() >= loop.latency_s + kw.get("signal_delay_s", 0) + kw.get("extra_wait_s", 0) - 1e-9
+        runs[name] = {c.trigger_idx: c for c in clicks}
+    # Delays come from a 25 ms grid, so a ~10 ms lag can't show up as a ~10 ms shift per click.
+    # What compensation guarantees: each click moves exactly delay_s earlier, unless the larger
+    # latency budget pushed its delay to a later grid step.
+    shared = runs["raw"].keys() & runs["comp"].keys()
+    assert len(shared) > 0.8 * len(off.times_s)
+    same = [k for k in shared if runs["comp"][k].delay_s == runs["raw"][k].delay_s]
+    assert len(same) > 0.8 * len(shared)
+    for k in same:
+        assert np.isclose(runs["comp"][k].heard_s, runs["raw"][k].heard_s - rs.delay_s)
+    assert all(runs["comp"][k].delay_s > runs["raw"][k].delay_s for k in shared - set(same))
+
+    def err(name):  # click time vs offline on the original signal, matching triggers within 2 samples
+        cs = runs[name].values()
+        return np.array([c.heard_s - t_off[k] for c in cs for k in range(c.trigger_idx - 2, c.trigger_idx + 3) if k in t_off])
+
+    assert abs(np.mean(err("comp"))) < abs(np.mean(err("raw")))

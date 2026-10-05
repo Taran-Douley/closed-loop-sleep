@@ -368,7 +368,8 @@ accelerometer and heart rate as extra inputs.
   of a real night (251/251 clicks, identical times) and in `tests/test_stream.py`. ~60× real
   time with 4-sample packets; ~1 ms per packet live.
 - `stream.Resampler` brings 256 Hz (Muse) / 250 Hz (OpenBCI) down to the models' 100 Hz,
-  causally (IIR anti-alias + interpolation, ≤ 10 ms lag at slow-wave frequencies).
+  causally (IIR anti-alias + interpolation). Its ~9.5 ms lag at slow-wave frequencies is
+  subtracted from click times and charged to the latency budget.
 - `cloop-live` streams any BrainFlow board into the pipeline and logs what it *would* play —
   no sound — with wall-clock issue times, slack, packet arrival times, P(N2/N3) per second
   and the processed signal. `cloop-report <logdir>` scores a log afterwards.
