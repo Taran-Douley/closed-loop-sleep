@@ -1,10 +1,10 @@
 """The default closed-loop pipeline (Phase 0.7 + timing accuracy), as one object to train and run.
 
     learned stage gate (p >= 0.8) -> adaptive threshold, rising-flank trigger (r = +0.5)
-    -> ridge timing model (soft targets, stretch; delay >= expected latency, 5 ms grid) -> optional confidence cut
+    -> ridge timing model (6 s window, soft targets, stretch; delay >= expected latency, 5 ms grid) -> optional confidence cut
 
-Held-out Sleep-EDF, all ages, 55 ms latency: ~60% of clicks within ±45° of the up-state,
-~40 on-target clicks per hour of N2+N3, < 1% of clicks in wake/REM (README).
+Held-out Sleep-EDF, all ages, 55 ms latency: ~62% of clicks within ±45° of the up-state,
+~41 on-target clicks per hour of N2+N3, < 1% of clicks in wake/REM (README).
 
     uv run cloop-train                      # fit on all 153 nights, save models/closed_loop.pkl
     loop = ClosedLoop.load("models/closed_loop.pkl")
@@ -25,6 +25,9 @@ import numpy as np
 from .detector import DetectorConfig, Triggers, detect
 from .predict import FLANK_DELAYS, TimingModel, features
 from .stage import StageGate, gate_from_prob, stage_features
+
+
+TIMING_WINDOW_S = 6.0  # signal window for the timing model (2 s until the window sweep; README)
 
 
 def fit_timing(X: np.ndarray, Y: np.ndarray, latency_s: float, step: float | None) -> TimingModel:
@@ -73,7 +76,7 @@ class ClosedLoop:
         gate = gate_from_prob(prob, len(eeg), fs, self.stage_threshold)
         cfg = DetectorConfig(**{**self.detector.__dict__, "gate": "external"})
         trg = detect(eeg, fs, cfg, gate_on=gate)
-        delay, conf = self.timing.predict(features(eeg, fs, trg), self.latency_s, self.delay_step_s)
+        delay, conf = self.timing.predict(features(eeg, fs, trg, window_s=self.timing.window_s), self.latency_s, self.delay_step_s)
         keep = conf >= self.conf_cut
         trg = trg.subset(keep)
         heard = trg.available_idx / fs + delay[keep]
@@ -90,7 +93,7 @@ class ClosedLoop:
 
 def main():
     from .data import ALL_RECORDINGS
-    from .phase07 import FIXED, prepare
+    from .phase07 import FIXED, prepare, prepare_window
 
     ap = argparse.ArgumentParser(description="Fit the default pipeline on all Sleep-EDF nights.")
     ap.add_argument("--workers", type=int, default=6)
@@ -99,10 +102,11 @@ def main():
     args = ap.parse_args()
     with ProcessPoolExecutor(args.workers) as ex:
         nights = list(ex.map(prepare, ALL_RECORDINGS))  # cached by cloop-phase07
+        X = list(ex.map(prepare_window, [(r, TIMING_WINDOW_S) for r in ALL_RECORDINGS]))
     oracle = list(FIXED).index("hypnogram gate (oracle)")
     loop = ClosedLoop(keep=args.keep).fit(
         np.concatenate([n["F_train"] for n in nights]), np.concatenate([n["y_train"] for n in nights]),
-        np.concatenate([n["fixed"][oracle]["X"] for n in nights]), np.concatenate([n["fixed"][oracle]["Y"] for n in nights]))
+        np.concatenate([x[oracle] for x in X]), np.concatenate([n["fixed"][oracle]["Y"] for n in nights]))
     loop.save(args.out)
     print(f"fitted on {len(nights)} nights; saved {args.out}")
 

@@ -109,6 +109,12 @@ class TimingModel:
         self.pipe = make_pipeline(StandardScaler(), reg).fit(X, Y)
         return self
 
+    @property
+    def window_s(self) -> float:
+        """Signal window the model was trained on (from its input width; 100 Hz features)."""
+        n = getattr(self.pipe, "n_features_in_", None)
+        return WINDOW_S if n is None else (n - 3) // 2 * DECIMATE / 100.0
+
     def predict(self, X: np.ndarray, min_delay: float = 0.0, step: float | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Returns (delay in seconds, confidence = predicted cos at that delay), choosing
         only among delays >= min_delay (e.g. the expected EEG + audio latency).

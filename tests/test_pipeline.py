@@ -9,7 +9,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 from cloop.detector import DetectorConfig, detect
 from cloop.evaluate import true_phase
-from cloop.pipeline import ClosedLoop
+from cloop.pipeline import TIMING_WINDOW_S, ClosedLoop
 from cloop.predict import features, targets
 from cloop.stage import stage_features
 from test_synthetic import make_rec
@@ -26,7 +26,8 @@ def _fitted():
     trg = detect(eeg, fs, DetectorConfig(gate="oracle"), np.repeat(np.where(is_sleep, 3, 0), int(fs)))
     rec = make_rec(minutes=40)
     rec.eeg = eeg
-    loop = ClosedLoop().fit(stage_features(eeg, fs), is_sleep, features(eeg, fs, trg), targets(true_phase(rec), fs, trg))
+    X = features(eeg, fs, trg, window_s=TIMING_WINDOW_S)
+    loop = ClosedLoop().fit(stage_features(eeg, fs), is_sleep, X, targets(true_phase(rec), fs, trg))
     return loop, eeg, fs, is_sleep
 
 

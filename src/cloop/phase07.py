@@ -26,7 +26,7 @@ from .data import ALL_RECORDINGS, DATA_DIR, ages, load_subject
 from .detector import DetectorConfig, detect
 from .evaluate import true_phase
 from .phase06 import AGE_BANDS, COS45, summarise
-from .predict import FLANK_DELAYS, TimingModel, features, targets
+from .predict import FLANK_DELAYS, WINDOW_S, TimingModel, features, targets
 from .stage import StageGate, gate_from_prob, stage_features, stage_labels
 
 CACHE = DATA_DIR / "cache"
@@ -46,8 +46,8 @@ def _path(rec_id, what):
     return CACHE / f"p07_{what}_SC4{rec_id[0]:02d}{rec_id[1]}_v{CACHE_VERSION}.npz"
 
 
-def _trigger_arrays(eeg, fs, stages, phase, trg, exact=False):
-    out = {"X": features(eeg, fs, trg).astype(np.float32), "Y": targets(phase, fs, trg).astype(np.float32),
+def _trigger_arrays(eeg, fs, stages, phase, trg, exact=False, window_s=WINDOW_S):
+    out = {"X": features(eeg, fs, trg, window_s=window_s).astype(np.float32), "Y": targets(phase, fs, trg).astype(np.float32),
            "stage": stages[trg.available_idx]}
     if exact:
         out["P"] = exact_phase(phase, fs, trg.available_idx)
@@ -77,6 +77,22 @@ def prepare_exact(rec_id):
         tmp.rename(path)
     z = np.load(path)
     return [z[f"P{i}"] for i in range(len(FIXED))]
+
+
+def prepare_window(args):
+    """(rec_id, window_s) -> the fixed gates' timing features with that signal window (cached)."""
+    rec_id, window_s = args
+    path = _path(rec_id, f"win{round(1000 * window_s)}")
+    if not path.exists():
+        z = np.load(_path(rec_id, "night"))
+        eeg, stages, fs = z["eeg"].astype(float), z["stages"], float(z["fs"])
+        arrays = {f"X{i}": features(eeg, fs, detect(eeg, fs, cfg, stages), window_s=window_s).astype(np.float32)
+                  for i, cfg in enumerate(FIXED.values())}
+        tmp = path.with_suffix(".tmp.npz")
+        np.savez_compressed(tmp, **arrays)
+        tmp.rename(path)
+    z = np.load(path)
+    return [z[f"X{i}"] for i in range(len(FIXED))]
 
 
 def prepare(rec_id):
@@ -112,14 +128,14 @@ def _gate_stats(gate_on, stages):
 
 def learned_triggers(args):
     """Gate one held-out night with this split's stage probabilities, at every threshold."""
-    rec_id, prob, exact = args
+    rec_id, prob, exact, window_s = args
     z = np.load(_path(rec_id, "night"))
     eeg, stages, phase, fs = z["eeg"].astype(float), z["stages"], z["phase"], float(z["fs"])
     out = []
     for th in THRESHOLDS:
         g = gate_from_prob(prob, len(eeg), fs, th)
         t = detect(eeg, fs, DetectorConfig(gate="external"), stages, gate_on=g)
-        out.append({**_trigger_arrays(eeg, fs, stages, phase, t, exact), "gate": _gate_stats(t.gate_on, stages)})
+        out.append({**_trigger_arrays(eeg, fs, stages, phase, t, exact, window_s), "gate": _gate_stats(t.gate_on, stages)})
     return out
 
 
@@ -133,6 +149,7 @@ def main():
     ap.add_argument("--delay-step", type=float, default=None,
                     help="choose delays on this grid (s, a multiple of 0.005) and score at the exact click time; "
                          "default: the 25 ms training grid, scored on it (the published Phase 0.7 numbers)")
+    ap.add_argument("--window", type=float, default=WINDOW_S, help="timing model's signal window, s")
     ap.add_argument("--timing", choices=("ridge", "pipeline"), default="ridge",
                     help="ridge: the Phase 0.7 timing model; pipeline: the current default (pipeline.fit_timing)")
     args = ap.parse_args()
@@ -141,7 +158,7 @@ def main():
     step, exact = args.delay_step, args.delay_step is not None
     if exact:
         assert abs(step / 0.005 - round(step / 0.005)) < 1e-6, "--delay-step must be a multiple of 0.005"
-    suffix = (f"_step{round(1000 * step)}ms" if exact else "") + ("_pipeline" if args.timing == "pipeline" else "")
+    suffix = (f"_win{args.window:g}s" if args.window != WINDOW_S else "") + (f"_step{round(1000 * step)}ms" if exact else "") + ("_pipeline" if args.timing == "pipeline" else "")
 
     recs = [r for r in ALL_RECORDINGS if r[0] <= args.max_subject]
     print(f"preparing {len(recs)} nights ...", flush=True)
@@ -152,6 +169,11 @@ def main():
                 for v, p in zip(n["fixed"], ps):
                     assert len(p) == len(v["X"]), n["rec"]
                     v["P"] = p
+        if args.window != WINDOW_S:
+            for n, xs in zip(nights, ex.map(prepare_window, [(r, args.window) for r in recs])):
+                for v, x in zip(n["fixed"], xs):
+                    assert len(x) == len(v["X"]), n["rec"]
+                    v["X"] = x
     age = ages()
     subjects = np.array(sorted({n["rec"][0] for n in nights}))
     rng = np.random.default_rng(args.seed)
@@ -179,7 +201,7 @@ def main():
         # HistGradientBoosting's OpenMP threads deadlock forked children
         probs = [gate.prob(np.load(_path(n["rec"], "night"))["F"]) for n in te]
         with ProcessPoolExecutor(args.workers, mp_context=multiprocessing.get_context("spawn")) as ex:
-            learned = list(ex.map(learned_triggers, [(n["rec"], p, exact) for n, p in zip(te, probs)]))
+            learned = list(ex.map(learned_triggers, [(n["rec"], p, exact, args.window) for n, p in zip(te, probs)]))
         for n, lv in zip(te, learned):
             variants = dict(zip(FIXED, n["fixed"]))
             variants.update({f"learned gate p>={th}": v for th, v in zip(THRESHOLDS, lv)})

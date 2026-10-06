@@ -22,7 +22,7 @@ from scipy.signal import butter, group_delay, lfilter, lfilter_zi, sosfilt
 
 from .detector import DetectorConfig, TroughTracker
 from .pipeline import ClosedLoop
-from .predict import DECIMATE, WINDOW_S
+from .predict import DECIMATE
 from .stage import BANDS, TAUS_S, RunningMedian
 
 
@@ -55,8 +55,9 @@ class StreamingLoop:
         self.band_zi = [np.zeros((2, 2)) for _ in BANDS]
         self.ema_a = [1.0 / (tau * fs) for tau in TAUS_S]
         self.ema_zi = [[np.zeros(1) for _ in TAUS_S] for _ in BANDS]
-        self.w = int(WINDOW_S * fs)
-        if self.cfg.trigger_max_wait_s >= WINDOW_S:
+        window_s = loop.timing.window_s
+        self.w = int(window_s * fs)
+        if self.cfg.trigger_max_wait_s >= window_s:
             raise ValueError("the trough must still be in the feature window when the trigger fires")
         self.buf_sw, self.buf_delta = np.zeros(self.w), np.zeros(self.w)
         self.sus_w = int(self.cfg.sustain_s * fs)

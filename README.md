@@ -11,8 +11,8 @@ clicks timed to land on the up-state of slow oscillations (Ngo et al., 2013).
 ```
 learned causal stage gate (P(N2/N3) >= 0.8, sustained 2 min)
   -> adaptive "deepest 5%" threshold, trigger on the rising flank at +0.5 x trough depth
-  -> ridge timing model (soft targets, delays stretched x1.3 above the latency floor)
-     picks the delay on a 5 ms grid (never sooner than EEG + audio latency)
+  -> ridge timing model (last 6 s of signal, soft targets, delays stretched x1.3 above the
+     latency floor) picks the delay on a 5 ms grid (never sooner than EEG + audio latency)
   -> optional: click only on the most confident half of waves
 ```
 
@@ -21,9 +21,9 @@ Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired
 
 | | Phase 0 pipeline | Phase 0.7 | **default** | + top 50% confidence |
 |---|---|---|---|---|
-| clicks within ±45° of the up-state | 35.5% | 57.2% | **60.2%** | 73.2% |
-| on-target clicks / hour of N2+N3 | ~10 | 37.8 | **39.8** | 23.8 |
-| clicks in wake/REM | 5.8% | 0.9% | **0.9%** | 0.8% |
+| clicks within ±45° of the up-state | 35.5% | 57.2% | **61.8%** | 73.9% |
+| on-target clicks / hour of N2+N3 | ~10 | 37.8 | **40.8** | 23.8 |
+| clicks in wake/REM | 5.8% | 0.9% | **0.9%** | 0.9% |
 
 (Phase 0 column as published. The Phase 0.7 column is its 25 ms run rescored at the exact
 click time, which is why it reads 57.2% here and 56.8% below.) See
@@ -366,23 +366,25 @@ accelerometer and heart rate as extra inputs.
 
 ## Timing accuracy (after Phase 0.7)
 
-Three changes to how the click delay is chosen. Same splits and learned gate (p ≥ 0.8) as
+Four changes to how the click delay is chosen. Same splits and learned gate (p ≥ 0.8) as
 Phase 0.7, but clicks are scored against the true phase at the exact click time.
 
 ```bash
 uv run cloop-phase07 --splits 10 --delay-step 0.025                     # Phase 0.7, rescored
 uv run cloop-phase07 --splits 10 --delay-step 0.005                     # + 5 ms grid
 uv run cloop-phase07 --splits 10 --delay-step 0.005 --timing pipeline   # + soft targets, stretch
+uv run cloop-phase07 --splits 10 --delay-step 0.005 --timing pipeline --window 6   # + 6 s window
 ```
 
 | | within ±45° | on-target/h | top 50% conf | gain, paired over splits |
 |---|---|---|---|---|
 | Phase 0.7 (25 ms grid) | 57.2 ± 0.9 | 37.8 | 69.6 | |
 | + 5 ms delay grid | 58.4 ± 1.1 | 38.6 | 72.1 | +1.3 ± 0.3 (10/10) |
-| **+ soft targets, alpha 1, stretch** | **60.2 ± 0.6** | **39.8** | **73.2** | +1.8 ± 0.7 (10/10) |
+| + soft targets, alpha 1, stretch | 60.2 ± 0.6 | 39.8 | 73.2 | +1.8 ± 0.7 (10/10) |
+| **+ 6 s signal window** | **61.8 ± 0.7** | **40.8** | **73.9** | +1.6 ± 0.2 (10/10) |
 
-By age, 25 ms → now: ≤ 40: 61.0 → 64.0%, 41–60: 59.5 → 62.4%, 61–80: 52.2 → 55.7%,
-81+: 50.5 → 53.2%.
+In all, +4.6 ± 0.5 points over Phase 0.7 (10/10 splits). By age, Phase 0.7 → now:
+≤ 40: 61.0 → 65.4%, 41–60: 59.5 → 63.7%, 61–80: 52.2 → 57.5%, 81+: 50.5 → 55.4%.
 
 1. **5 ms delay grid.** The timing model is trained on a 25 ms grid. Its predicted curve is now
    spline-interpolated and the best delay chosen every 5 ms (`ClosedLoop.delay_step_s`). The
@@ -397,9 +399,21 @@ By age, 25 ms → now: ≤ 40: 61.0 → 64.0%, 41–60: 59.5 → 62.4%, 61–80:
    constant offset doesn't fix this (a learned one comes out at +1.5 ms). Scaling the delay
    above the floor does: `d = floor + k (d − floor)`, with k fitted on the training data
    (1.2–1.4 across splits; 1.3 on all nights).
+4. **6 s signal window** instead of 2 s, so the model sees the previous wave or two. Sweep on
+   all real N2/N3 waves: 2 s 59.6%, 3 s 60.3, 4 s 60.7, **6 s 61.1**, 8 s 61.0. The window
+   comes from the trained model (`TimingModel.window_s`), so older 2 s models still load.
 
-Also tried, on all real N2/N3 waves (hypnogram gate): an MLP (+1.2 but in only 8/10 splits,
-with high variance), random RBF features + ridge (+0.6), stronger ridge (worse). The latency
+Also tried, on all real N2/N3 waves (hypnogram gate), none adopted:
+
+- an MLP (+1.2 but only 8/10 splits, high variance), random RBF features + ridge (+0.6),
+  stronger ridge (worse);
+- the person's recent waves: median trigger→peak time of their last 5 / 20 waves, measured
+  causally once each peak has passed (+0.05). The signal window already carries it;
+- gradient boosting on the single best delay instead of the score curve (−19 points: the best
+  delay is often ambiguous, and one number throws that away);
+- the trigger point. Later triggers are more accurate but fire on fewer waves: r = 0 47.7%
+  (58 on-target/h), 0.25 52.6% (63/h), **0.5 59.6% (61/h)**, 0.75 67.1% (40/h). That's the
+  same dose-for-accuracy trade as the confidence cut, not a free gain, so r stays 0.5. The latency
 floor is the bigger limit: Phase 0.6 measured 64.6% at zero latency vs 60.4% at 55 ms.
 
 ## Phase 1 — live, log only
