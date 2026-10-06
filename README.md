@@ -411,6 +411,10 @@ Also tried, on all real N2/N3 waves (hypnogram gate), none adopted:
   more from the longer window than ridge does (2 s: 58.9%) and doesn't shrink (its fitted
   stretch is 1.0), but still loses. Averaging its curve with ridge's: +0.4 ± 0.35 (2/3),
   not worth adding PyTorch and ~4 min of training to the pipeline;
+- more filter bands in the 6 s window (causal, scaled by trough depth like the others):
+  0.16–1 Hz +0.14 ± 0.08 (9/10, too small to be worth another live filter), theta 4–8 Hz
+  −0.07, spindle envelope 11–16 Hz −0.38, all three −0.42. The slow-wave and delta bands
+  already carry what a single frontal channel says about the next up-state;
 - the person's recent waves: median trigger→peak time of their last 5 / 20 waves, measured
   causally once each peak has passed (+0.05). The signal window already carries it;
 - gradient boosting on the single best delay instead of the score curve (−19 points: the best
