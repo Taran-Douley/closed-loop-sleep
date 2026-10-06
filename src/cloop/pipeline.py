@@ -99,16 +99,19 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--keep", type=float, default=1.0)
     ap.add_argument("--out", default="models/closed_loop.pkl")
+    ap.add_argument("--eeg-latency", type=float, default=ClosedLoop.eeg_latency_s, help="s, from cloop-eeg-latency")
+    ap.add_argument("--audio-latency", type=float, default=ClosedLoop.audio_latency_s, help="s, from cloop-audio-latency")
     args = ap.parse_args()
     with ProcessPoolExecutor(args.workers) as ex:
         nights = list(ex.map(prepare, ALL_RECORDINGS))  # cached by cloop-phase07
         X = list(ex.map(prepare_window, [(r, TIMING_WINDOW_S) for r in ALL_RECORDINGS]))
     oracle = list(FIXED).index("hypnogram gate (oracle)")
-    loop = ClosedLoop(keep=args.keep).fit(
+    loop = ClosedLoop(keep=args.keep, eeg_latency_s=args.eeg_latency, audio_latency_s=args.audio_latency).fit(
         np.concatenate([n["F_train"] for n in nights]), np.concatenate([n["y_train"] for n in nights]),
         np.concatenate([x[oracle] for x in X]), np.concatenate([n["fixed"][oracle]["Y"] for n in nights]))
     loop.save(args.out)
-    print(f"fitted on {len(nights)} nights; saved {args.out}")
+    print(f"fitted on {len(nights)} nights, latency {1000 * loop.latency_s:.0f} ms "
+          f"(EEG {1000 * loop.eeg_latency_s:.0f} + audio {1000 * loop.audio_latency_s:.0f}); saved {args.out}")
 
 
 if __name__ == "__main__":

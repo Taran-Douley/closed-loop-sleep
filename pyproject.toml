@@ -28,6 +28,8 @@ cloop-train = "cloop.pipeline:main"
 cloop-live = "cloop.live:main"
 cloop-export-playback = "cloop.live:export_playback"
 cloop-report = "cloop.live:report"
+cloop-audio-latency = "cloop.latency:audio_main"
+cloop-eeg-latency = "cloop.latency:eeg_main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
@@ -40,6 +42,9 @@ dev = [
 
 [project.optional-dependencies]
 gru = ["torch>=2.5"]
+audio = [
+    "sounddevice>=0.5.6",
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

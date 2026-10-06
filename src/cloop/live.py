@@ -2,7 +2,8 @@
 
 No sound is played. Every decision is logged so nights can be scored offline later.
 
-    uv run cloop-live --board muse_s --channel AF7                    # real headband (BLED / native BLE)
+    uv run cloop-live --board muse_s_athena --channel AF7             # Muse S Athena (native BLE; Windows Python)
+    uv run cloop-live --board muse_s --channel AF7                    # older Muse S (BLED / native BLE)
     uv run cloop-live --board cyton --serial-port /dev/ttyUSB0 --channel Fp1
     uv run cloop-live --board synthetic --channel Fz --minutes 2      # smoke test
     uv run cloop-export-playback --subject 5 --out night.csv          # Sleep-EDF night -> Muse-format file
@@ -26,7 +27,7 @@ import numpy as np
 from .pipeline import ClosedLoop
 from .stream import Resampler, StreamingLoop
 
-BOARDS = {"muse_s": "MUSE_S_BOARD", "muse_2": "MUSE_2_BOARD", "muse_s_bled": "MUSE_S_BLED_BOARD",
+BOARDS = {"muse_s_athena": "MUSE_S_ATHENA_BOARD", "muse_s": "MUSE_S_BOARD", "muse_2": "MUSE_2_BOARD", "muse_s_bled": "MUSE_S_BLED_BOARD",
           "cyton": "CYTON_BOARD", "synthetic": "SYNTHETIC_BOARD", "playback": "PLAYBACK_FILE_BOARD"}
 
 

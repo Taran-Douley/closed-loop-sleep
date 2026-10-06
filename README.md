@@ -465,12 +465,31 @@ uv run cloop-report logs/<time>
 
 ### Step 2: hardware (next)
 
-Recommended: **Muse S + BLED112 dongle** (`--board muse_s_bled`, steadier than OS
-Bluetooth), **wired** audio into flat sleep headphones. Then: measure audio latency (output →
-mic loopback) and EEG latency (tap the headband while the mic records it); record 3–5
-log-only nights; stage them with YASA as pseudo-labels; check targeting / gate / slack with
-`cloop-report`, and retrain the stage gate on Muse data if it drifts. OpenBCI Cyton (gel,
-8 ch) is the better validation instrument but much harder to sleep in.
+Recommended: **Muse S Athena** (`--board muse_s_athena`: BrainFlow ≥ 5.22, native Bluetooth,
+no dongle; 4 EEG channels at 256 Hz plus accelerometer/gyro and optical rows), **wired** audio
+into flat sleep headphones, and any microphone for the latency tests. Run the live tools with
+**Windows Python, not WSL**: WSL can't see the Bluetooth adapter or audio devices. OpenBCI
+Cyton (gel, 8 ch) is the better validation instrument but much harder to sleep in.
+
+```bash
+uv sync --extra audio                                            # sounddevice (PortAudio)
+uv run cloop-audio-latency --n 40                                # mic to an ear cup; headphones off your head
+uv run cloop-eeg-latency --board muse_s_athena --channel AF7     # tap the headband at each prompt
+uv run cloop-train --eeg-latency 0.0xx --audio-latency 0.0xx     # retrain with the measured medians
+```
+
+- `cloop-audio-latency` plays pink-noise clicks through `audio.ClickPlayer` (the Phase 2
+  player: a running low-latency stream that starts the click in the next audio block) and
+  times each one from command to onset at the microphone, on the audio stream's clock.
+- `cloop-eeg-latency` times each tap from the moment the microphone hears it to the arrival
+  of the first EEG sample showing it, i.e. acquisition → software, including BLE buffering
+  and polling. The audio and wall clocks are matched from the audio callbacks.
+- Both report median, SD (jitter) and 95th percentile, and save the raw recordings in
+  `logs/latency-*`. The analysis is tested on synthetic recordings with known latencies
+  (`tests/test_latency.py`); the hardware side can only be checked on hardware.
+
+Then record 3–5 log-only nights; stage them with YASA as pseudo-labels; check targeting /
+gate / slack with `cloop-report`, and retrain the stage gate on Muse data if it drifts.
 
 ## Layout
 
@@ -490,6 +509,8 @@ src/cloop/phase07.py    learned gate vs hand-made gates, by age (cloop-phase07)
 src/cloop/pipeline.py   the default pipeline: fit / plan / save / load (cloop-train)
 src/cloop/stream.py     streaming pipeline + causal resampler
 src/cloop/live.py       BrainFlow runner, playback export, log report (cloop-live / -export-playback / -report)
+src/cloop/audio.py      low-latency click player (Phase 2), pink-noise click
+src/cloop/latency.py    audio / EEG latency measurement (cloop-audio-latency / -eeg-latency)
 tests/                  synthetic-signal sanity tests, causality test for the model
 ```
 
