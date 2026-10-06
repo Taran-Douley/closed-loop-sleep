@@ -407,6 +407,10 @@ Also tried, on all real N2/N3 waves (hypnogram gate), none adopted:
 
 - an MLP (+1.2 but only 8/10 splits, high variance), random RBF features + ridge (+0.6),
   stronger ridge (worse);
+- the GRU (`gru.py`) on the 6 s window, 3 splits: 60.5% vs ridge's 61.2% (0/3). It gains
+  more from the longer window than ridge does (2 s: 58.9%) and doesn't shrink (its fitted
+  stretch is 1.0), but still loses. Averaging its curve with ridge's: +0.4 ± 0.35 (2/3),
+  not worth adding PyTorch and ~4 min of training to the pipeline;
 - the person's recent waves: median trigger→peak time of their last 5 / 20 waves, measured
   causally once each peak has passed (+0.05). The signal window already carries it;
 - gradient boosting on the single best delay instead of the score curve (−19 points: the best
