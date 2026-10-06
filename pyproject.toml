@@ -5,6 +5,8 @@ description = "Closed-loop acoustic stimulation (CLAS) for slow-wave sleep: offl
 authors = [
     { name = "Taran Douley", email = "271458559+Taran-Douley@users.noreply.github.com" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "brainflow>=5.23.0",

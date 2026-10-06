@@ -1,12 +1,58 @@
 # closed-loop-sleep
 
-Open-source closed-loop acoustic stimulation (CLAS) for slow-wave sleep: short pink-noise
-clicks timed to land on the up-state of slow oscillations (Ngo et al., 2013).
+**Open-source closed-loop acoustic stimulation (CLAS) for deep sleep.** A consumer EEG
+headband watches for deep-sleep slow waves; the software plays a soft pink-noise click timed
+to land on each wave's peak (its "up-state"). In lab studies, clicks timed this way deepened
+slow-wave sleep and improved overnight memory
+([Ngo et al., 2013](https://doi.org/10.1016/j.neuron.2013.03.006)); clicks off the beat did
+nothing. This project builds that loop for home hardware and measures, honestly, how well it
+works.
 
-> **Not a medical device.** This is a research/hobby project. It makes no claim to improve
-> sleep, memory or health. Don't use it in place of medical care.
+> **Not a medical device.** This is a research project. It makes no claim to improve sleep,
+> memory or health. Don't use it in place of medical care.
 
-## Current default pipeline (Phase 0.7 + timing accuracy)
+## Results so far
+
+Simulated on [Sleep-EDF](https://physionet.org/content/sleep-edfx/): 153 nights from 78
+people aged 25–101, always scored on people the models never trained on, with a realistic
+55 ms of Bluetooth EEG + wired audio delay.
+
+| | first version | **now** | now, most confident half of waves |
+|---|---|---|---|
+| clicks within ±45° of the up-state | 35.5% | **61.8%** | 73.9% |
+| on-target clicks per hour of deep sleep | ~10 | **40.8** | 23.8 |
+| clicks in wake or REM (should be 0) | 5.8% | **0.9%** | 0.9% |
+
+What didn't help is written up too: bigger neural networks, extra EEG bands, per-person
+history, a different trigger point ([details](#timing-accuracy-after-phase-07)).
+
+## Status
+
+- [x] **Offline pipeline**: sleep-stage gate, wave detector, timing model, validated on
+  held-out people.
+- [x] **Live streaming**: the same code runs packet by packet from any
+  [BrainFlow](https://brainflow.org) board and gives exactly the offline clicks.
+- [x] **Latency tools**: measure the real headband and headphone delays.
+- [ ] **Hardware** (next): Muse S Athena, measure latency, record nights with no sound.
+- [ ] **Sham-controlled test**: randomised real vs sham nights, capped volume,
+  pre-registered analysis.
+- [ ] **Release**: validation report and open dataset, whatever the result.
+
+## Quickstart
+
+```bash
+uv sync                                  # Python 3.12+, https://docs.astral.sh/uv/
+uv run pytest                            # sanity, causality and streaming checks
+uv run cloop-phase07 --splits 10 --delay-step 0.005 --timing pipeline --window 6
+                                         # reproduce the headline numbers: the first run downloads
+                                         # Sleep-EDF and builds a ~3 GB cache; ~1 h after that
+uv run cloop-train                       # fit the default pipeline -> models/closed_loop.pkl
+uv run cloop-live --board synthetic --minutes 2   # smoke-test the live runner, no hardware
+```
+
+With a headband, see [Step 2: hardware](#step-2-hardware-next).
+
+## How it works
 
 ```
 learned causal stage gate (P(N2/N3) >= 0.8, sustained 2 min)
@@ -16,8 +62,15 @@ learned causal stage gate (P(N2/N3) >= 0.8, sustained 2 min)
   -> optional: click only on the most confident half of waves
 ```
 
-Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired audio),
-10 splits, clicks scored against the true phase at the exact click time:
+Everything is causal: each decision uses only data a live system would already have.
+`ClosedLoop` is the whole pipeline as one object:
+
+```python
+from cloop.pipeline import ClosedLoop
+clicks = ClosedLoop.load("models/closed_loop.pkl").plan(eeg_uv, fs)   # clicks.issue_s, clicks.times_s
+```
+
+Detailed results, 10 splits, clicks scored against the true phase at the exact click time:
 
 | | Phase 0 pipeline | Phase 0.7 | **default** | + top 50% confidence |
 |---|---|---|---|---|
@@ -28,14 +81,6 @@ Held-out Sleep-EDF subjects, all ages (25–101), 55 ms latency (BLE EEG + wired
 (Phase 0 column as published. The Phase 0.7 column is its 25 ms run rescored at the exact
 click time, which is why it reads 57.2% here and 56.8% below.) See
 [Timing accuracy](#timing-accuracy-after-phase-07) for what changed.
-
-```bash
-uv run cloop-train                  # fit on all 153 nights -> models/closed_loop.pkl (needs cloop-phase07's cache)
-```
-```python
-from cloop.pipeline import ClosedLoop
-clicks = ClosedLoop.load("models/closed_loop.pkl").plan(eeg_uv, fs)   # clicks.issue_s, clicks.times_s
-```
 
 The phases below are the history of how we got here; each phase's script pins the settings
 it used, so its numbers still reproduce.
@@ -529,3 +574,7 @@ tests/                  synthetic-signal sanity tests, causality test for the mo
 - Ngo et al. (2013). Auditory closed-loop stimulation of the sleep slow oscillation enhances memory. *Neuron*.
 - Valenchon et al. (2022). The Portiloop: a deep learning-based open science tool for closed-loop brain stimulation. *PLOS ONE*.
 - Kemp et al. (2000). Sleep-EDF. PhysioNet.
+
+## License
+
+[MIT](LICENSE). Sleep-EDF data is from PhysioNet under its own terms.
